@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "toongod",
+  "name": "ToonGod",
+  "version": "1.0.0",
+  "mediaKind": "comics",
+  "language": "en",
+  "engine": "madara",
+  "baseUrl": "https://www.toongod.org",
+  "icon": "https://www.toongod.org/wp-content/uploads/2021/04/cropped-TG-192x192.jpg",
+  "headers": {
+    "Referer": "https://www.toongod.org/"
+  },
+  "engineConfig": {
+    "mangaPath": "webtoon",
+    "useAjaxLoadMore": false,
+    "chapterUrlSuffix": "?style=list"
+  }
+}

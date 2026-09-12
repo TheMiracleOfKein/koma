@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "mangalib",
+  "name": "MangaLib",
+  "version": "1.0.0",
+  "mediaKind": "comics",
+  "language": "ru",
+  "engine": "libsocial",
+  "baseUrl": "https://mangalib.me",
+  "headers": {
+    "Referer": "https://mangalib.me/"
+  },
+  "engineConfig": {
+    "apiBase": "https://api.mangalib.me/api",
+    "siteId": "1"
+  }
+}
