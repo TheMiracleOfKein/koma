@@ -16,5 +16,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Koma"
+rootProject.name = "Lume"
 include(":app")

@@ -3,10 +3,10 @@
 
 sdk.dir=C\:\\Path\\To\\Android\\sdk
 
-# OAuth application credentials (identify Koma as a client on the tracker).
+# OAuth application credentials (identify Lume as a client on the tracker).
 # End users log in with their own accounts; they never enter these values.
 # Leave empty if you do not need tracker login in your build.
-KOMA_ANILIST_CLIENT_ID=
-KOMA_ANILIST_CLIENT_SECRET=
-KOMA_SHIKIMORI_CLIENT_ID=
-KOMA_SHIKIMORI_CLIENT_SECRET=
+LUME_ANILIST_CLIENT_ID=
+LUME_ANILIST_CLIENT_SECRET=
+LUME_SHIKIMORI_CLIENT_ID=
+LUME_SHIKIMORI_CLIENT_SECRET=

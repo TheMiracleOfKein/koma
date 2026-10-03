@@ -1,6 +1,6 @@
-# Contributing to Koma
+# Contributing to Lume
 
-Thanks for helping improve Koma.
+Thanks for helping improve Lume.
 
 ## Setup
 
@@ -12,7 +12,7 @@ Thanks for helping improve Koma.
 ./gradlew :app:assembleDebug
 ```
 
-OAuth keys (`KOMA_*`) are optional for catalogue/reader work.
+OAuth keys (`LUME_*`) are optional for catalogue/reader work.
 
 ## Pull requests
 

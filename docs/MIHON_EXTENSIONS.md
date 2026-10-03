@@ -1,6 +1,6 @@
 # Mihon / Tachiyomi extensions — deferred
 
-Koma deliberately does **not** load third-party Mihon/Tachiyomi extension APKs at runtime.
+Lume deliberately does **not** load third-party Mihon/Tachiyomi extension APKs at runtime.
 
 ## Why ExtensionLoader stays out of scope
 

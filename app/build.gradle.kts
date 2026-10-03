@@ -27,22 +27,22 @@ private fun oauthBuildConfig(name: String): String {
 }
 
 android {
-    namespace = "com.koma.kt"
+    namespace = "com.lume.app"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.koma.kt"
+        applicationId = "com.lume.app"
         minSdk = 26
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
 
-        // OAuth app credentials for AniList / Shikimori (identify Koma itself).
-        // Put values in root local.properties (gitignored), e.g. KOMA_SHIKIMORI_CLIENT_ID=...
-        buildConfigField("String", "ANILIST_CLIENT_ID", oauthBuildConfig("KOMA_ANILIST_CLIENT_ID"))
-        buildConfigField("String", "ANILIST_CLIENT_SECRET", oauthBuildConfig("KOMA_ANILIST_CLIENT_SECRET"))
-        buildConfigField("String", "SHIKIMORI_CLIENT_ID", oauthBuildConfig("KOMA_SHIKIMORI_CLIENT_ID"))
-        buildConfigField("String", "SHIKIMORI_CLIENT_SECRET", oauthBuildConfig("KOMA_SHIKIMORI_CLIENT_SECRET"))
+        // OAuth app credentials for AniList / Shikimori (identify Lume itself).
+        // Put values in root local.properties (gitignored), e.g. LUME_SHIKIMORI_CLIENT_ID=...
+        buildConfigField("String", "ANILIST_CLIENT_ID", oauthBuildConfig("LUME_ANILIST_CLIENT_ID"))
+        buildConfigField("String", "ANILIST_CLIENT_SECRET", oauthBuildConfig("LUME_ANILIST_CLIENT_SECRET"))
+        buildConfigField("String", "SHIKIMORI_CLIENT_ID", oauthBuildConfig("LUME_SHIKIMORI_CLIENT_ID"))
+        buildConfigField("String", "SHIKIMORI_CLIENT_SECRET", oauthBuildConfig("LUME_SHIKIMORI_CLIENT_SECRET"))
     }
 
     buildTypes {

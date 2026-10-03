@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Koma</string>
+    <string name="app_name">Lume</string>
 
     <!-- Language -->
     <string name="lang_system">System default</string>

@@ -1,10 +1,10 @@
-# Koma
+# Lume
 
 Android manga / comics reader written in **Kotlin** and **Jetpack Compose**.
 
-Koma uses first-party catalogue engines (MangaDex, Madara, LibSocial, and others). JSON packs can clone supported families without shipping new Kotlin code. See [docs/ENGINES.md](docs/ENGINES.md).
+Lume uses first-party catalogue engines (MangaDex, Madara, LibSocial, and others). JSON packs can clone supported families without shipping new Kotlin code. See [docs/ENGINES.md](docs/ENGINES.md).
 
-![Koma](branding/koma_icon_320.png)
+![Lume](branding/lume_icon_320.png)
 
 ## Features
 
@@ -35,11 +35,11 @@ APK output: `app/build/outputs/apk/debug/`.
 
 1. Copy [`local.properties.example`](local.properties.example) to `local.properties`.
 2. Set `sdk.dir` (Android Studio usually does this for you).
-3. Optionally fill `KOMA_*` OAuth keys for tracker login (see below).
+3. Optionally fill `LUME_*` OAuth keys for tracker login (see below).
 
 ## Tracker OAuth (optional)
 
-Shikimori / AniList need **application** client credentials that identify Koma. End users still sign in with their own accounts.
+Shikimori / AniList need **application** client credentials that identify Lume. End users still sign in with their own accounts.
 
 - Keep real keys only in `local.properties` (gitignored).
 - Official release builds you produce locally (or later via CI secrets) can bake keys into the APK via `BuildConfig`.
@@ -60,7 +60,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Disclaimer
 
-Koma does **not** host manga or comic content. Catalogues and images come from third-party websites and APIs. Koma is not affiliated with those services. You are responsible for complying with the laws and terms that apply where you use the app.
+Lume does **not** host manga or comic content. Catalogues and images come from third-party websites and APIs. Lume is not affiliated with those services. You are responsible for complying with the laws and terms that apply where you use the app.
 
 ## License
 

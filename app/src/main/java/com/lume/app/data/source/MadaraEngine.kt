@@ -1,0 +1,347 @@
+package com.lume.app.data.source
+
+import com.lume.app.data.network.AppHttp
+import com.lume.app.domain.CatalogSource
+import com.lume.app.domain.Chapter
+import com.lume.app.domain.ComicPage
+import com.lume.app.domain.HomeFeed
+import com.lume.app.domain.PagedResult
+import com.lume.app.domain.SourceFetchException
+import com.lume.app.domain.SourceManifest
+import com.lume.app.domain.TitleDetails
+import com.lume.app.domain.TitleSummary
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Element
+import java.net.URI
+import com.lume.app.util.urlEncode
+
+class MadaraParser {
+    fun parseTitleList(html: String, page: Int, baseUrl: String?): PagedResult<TitleSummary> {
+        val document = Jsoup.parse(html, baseUrl.orEmpty())
+        val nodes = document.select(
+            "div.page-item-detail, div.manga, div.col-6.col-md-3, div.item, div.c-tabs-item__content",
+        )
+        val items = mutableListOf<TitleSummary>()
+        val seen = mutableSetOf<String>()
+        for (node in nodes) {
+            val parsed = parseListItem(node, baseUrl) ?: continue
+            if (!seen.add(parsed.id)) continue
+            items += parsed
+        }
+        if (items.isEmpty()) {
+            for (a in document.select("div.item-thumb a[href], div.post-title a[href]")) {
+                val parsed = fromAnchor(a, scope = null, baseUrl = baseUrl) ?: continue
+                if (!seen.add(parsed.id)) continue
+                items += parsed
+            }
+        }
+        return PagedResult(items = items, page = page, hasNext = items.size >= 12)
+    }
+
+    private fun parseListItem(node: Element, baseUrl: String?): TitleSummary? {
+        val anchor = node.selectFirst(
+            "div.item-thumb a[href], a[href].img, h3 a[href], h5 a[href], div.post-title a[href]",
+        ) ?: node.selectFirst("a[href]") ?: return null
+        return fromAnchor(anchor, scope = node, baseUrl = baseUrl)
+    }
+
+    private fun fromAnchor(anchor: Element, scope: Element?, baseUrl: String?): TitleSummary? {
+        val href = anchor.attr("abs:href").ifBlank { anchor.attr("href") }
+        if (href.isBlank() || href.contains("/wp-") || href.contains("#")) return null
+        val id = idFromUrl(href)
+        if (id.isEmpty()) return null
+        val title = (anchor.attr("title").ifBlank {
+            anchor.text().ifBlank {
+                scope?.selectFirst("h3, h5, .post-title")?.text().orEmpty()
+            }
+        }).trim()
+        if (title.isEmpty()) return null
+        val img = scope?.selectFirst("img") ?: anchor.selectFirst("img")
+        val cover = absoluteUrl(imageUrl(img), baseUrl)
+        val chapter = scope?.selectFirst(
+            ".list-chapter .chapter a, .chapter-item .chapter a, span.chapter a, .latest-chap a",
+        )?.text()?.trim()
+        val updated = scope?.selectFirst(".post-on, .font-meta, span.post-on, .c-new-tag")?.text()?.trim()
+        return TitleSummary(
+            id = id,
+            title = title,
+            coverUrl = cover,
+            latestChapter = chapter?.takeIf { it.isNotEmpty() },
+            updatedLabel = updated?.takeIf { it.isNotEmpty() },
+        )
+    }
+
+    fun parseTitleDetails(html: String, id: String, baseUrl: String?): TitleDetails {
+        val document = Jsoup.parse(html, baseUrl.orEmpty())
+        val title = document.selectFirst("div.post-title h1, div.post-title h3, h1")
+            ?.text()?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
+        val description = document.selectFirst(
+            "div.description-summary div.summary__content, div.summary__content, div.dsct, .manga-excerpt",
+        )?.text()?.trim().orEmpty()
+        val cover = absoluteUrl(
+            imageUrl(document.selectFirst("div.summary_image img, .tab-summary img, .profile-manga img")),
+            baseUrl,
+        )
+        val authors = document.select("div.author-content a, div.manga-authors a").map { it.text().trim() }
+            .filter { it.isNotEmpty() }
+        val artists = document.select("div.artist-content a").map { it.text().trim() }.filter { it.isNotEmpty() }
+        val genres = document.select("div.genres-content a, div.wp-manga-tags-list a").map { it.text().trim() }
+            .filter { it.isNotEmpty() }
+        var status: String? = null
+        for (item in document.select("div.post-status .post-content_item, .post-content_item")) {
+            val label = item.selectFirst(".summary-heading")?.text()?.lowercase().orEmpty()
+            if (label.contains("status") || label.contains("статус")) {
+                status = item.selectFirst(".summary-content")?.text()?.trim()
+            }
+        }
+        var typeLabel: String? = null
+        for (item in document.select("div.post-content_item")) {
+            val label = item.selectFirst(".summary-heading")?.text()?.lowercase().orEmpty()
+            if (label.contains("type") || label.contains("тип")) {
+                typeLabel = item.selectFirst(".summary-content")?.text()?.trim()
+            }
+        }
+        return TitleDetails(
+            id = id,
+            title = title,
+            coverUrl = cover,
+            description = description.ifEmpty { null },
+            authors = authors,
+            artists = artists,
+            genres = genres,
+            status = status,
+            typeLabel = typeLabel,
+        )
+    }
+
+    fun parseChapters(html: String): List<Chapter> {
+        val document = Jsoup.parse(html)
+        val nodes = document.select(
+            "li.wp-manga-chapter, li.chapter-item, li.wp-manga-chapter.free-chap, .listing-chapters_wrap li",
+        )
+        val chapters = mutableListOf<Chapter>()
+        val seen = mutableSetOf<String>()
+        for (node in nodes) {
+            val a = node.selectFirst("a[href]") ?: continue
+            val href = a.attr("abs:href").ifBlank { a.attr("href") }
+            if (href.isBlank()) continue
+            val id = idFromUrl(href)
+            if (!seen.add(id)) continue
+            val name = a.text().replace(Regex("\\s+"), " ").trim()
+            val date = node.selectFirst(".chapter-release-date, span.i-time, .c-new-tag")?.text()?.trim()
+            chapters += Chapter(
+                id = id,
+                title = name.ifEmpty { id },
+                url = href,
+                dateLabel = date?.takeIf { it.isNotEmpty() },
+                number = chapterNumber(name),
+                volume = volumeNumber(name),
+            )
+        }
+        return chapters
+    }
+
+    fun parsePages(html: String, baseUrl: String?): List<ComicPage> {
+        val document = Jsoup.parse(html, baseUrl.orEmpty())
+        val images = document.select(
+            "div.page-break img, div.reading-content img, .blocks-gallery-item img, img.wp-manga-chapter-img",
+        )
+        val pages = mutableListOf<ComicPage>()
+        val seen = mutableSetOf<String>()
+        for (img in images) {
+            val url = absoluteUrl(imageUrl(img), baseUrl) ?: continue
+            if (url.startsWith("data:")) continue
+            if (!seen.add(url)) continue
+            pages += ComicPage(index = pages.size, imageUrl = url)
+        }
+        return pages
+    }
+
+    private fun absoluteUrl(url: String?, baseUrl: String?): String? {
+        if (url.isNullOrBlank()) return null
+        val parsed = runCatching { URI(url) }.getOrNull() ?: return url
+        if (parsed.scheme != null) return url
+        if (baseUrl.isNullOrBlank()) return url
+        return URI(baseUrl).resolve(url).toString()
+    }
+
+    private fun imageUrl(img: Element?): String? {
+        if (img == null) return null
+        for (attr in listOf("data-src", "data-lazy-src", "data-cfsrc", "data-original", "src")) {
+            val value = img.attr(attr).trim()
+            if (value.isNotEmpty() && !value.startsWith("data:")) return value.split(" ").first()
+        }
+        val srcset = img.attr("srcset").ifBlank { img.attr("data-srcset") }
+        if (srcset.isNotEmpty()) return srcset.split(",").last().trim().split(" ").first()
+        return null
+    }
+
+    private fun idFromUrl(url: String): String {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return url
+        var path = uri.path.orEmpty()
+        if (!path.endsWith("/")) path = "$path/"
+        return path
+    }
+
+    private fun chapterNumber(title: String): String? =
+        Regex("(?:chapter|ch\\.?|глава|гл\\.?)\\s*([0-9]+(?:\\.[0-9]+)?)", RegexOption.IGNORE_CASE)
+            .find(title)?.groupValues?.getOrNull(1)
+
+    private fun volumeNumber(title: String): String? =
+        Regex("(?:volume|vol\\.?|том)\\s*([0-9]+)", RegexOption.IGNORE_CASE)
+            .find(title)?.groupValues?.getOrNull(1)
+}
+
+class MadaraEngine(
+    override val manifest: SourceManifest,
+    private val http: AppHttp,
+    private val parser: MadaraParser = MadaraParser(),
+) : CatalogSource {
+    private val mangaPath get() = manifest.configString("mangaPath") ?: "manga"
+    private val useAjax get() = manifest.configBool("useAjaxLoadMore", fallback = true)
+    private val chapterSuffix get() = manifest.configString("chapterUrlSuffix") ?: "?style=list"
+
+    private fun abs(pathOrUrl: String): URI {
+        val parsed = URI(pathOrUrl)
+        return if (parsed.scheme != null) parsed else manifest.baseUri.resolve(pathOrUrl)
+    }
+
+    override suspend fun getHome(): HomeFeed {
+        val latest = getLatest()
+        val popular = getPopular()
+        return HomeFeed(spotlight = popular.items.take(12), latest = latest.items)
+    }
+
+    override suspend fun getLatest(page: Int) =
+        browse(page = page, orderBy = "latest", ajaxMetaKey = "_latest_update")
+
+    override suspend fun getPopular(page: Int) =
+        browse(page = page, orderBy = "views", ajaxMetaKey = "_wp_manga_views")
+
+    private suspend fun browse(page: Int, orderBy: String, ajaxMetaKey: String): PagedResult<TitleSummary> {
+        if (useAjax) {
+            runCatching { return ajaxList(page, ajaxMetaKey) }
+        }
+        val path = if (page > 1) "$mangaPath/page/$page/" else "$mangaPath/"
+        val uri = URI(
+            manifest.baseUri.scheme,
+            manifest.baseUri.authority,
+            "/$path".replace("//", "/"),
+            "m_orderby=$orderBy",
+            null,
+        )
+        val response = http.get(uri, source = manifest)
+        return parser.parseTitleList(response.body, page, manifest.baseUrl)
+    }
+
+    private suspend fun ajaxList(page: Int, metaKey: String): PagedResult<TitleSummary> {
+        val uri = manifest.baseUri.resolve("/wp-admin/admin-ajax.php")
+        val response = http.postForm(
+            uri,
+            source = manifest,
+            headers = mapOf(
+                "X-Requested-With" to "XMLHttpRequest",
+                "Origin" to manifest.baseUrl.trimEnd('/'),
+                "Referer" to "${manifest.baseUrl.trimEnd('/')}/",
+            ),
+            form = mapOf(
+                "action" to "madara_load_more",
+                "page" to "${page - 1}",
+                "template" to "madara-core/content/content-archive",
+                "vars[paged]" to "1",
+                "vars[orderby]" to "meta_value_num",
+                "vars[template]" to "archive",
+                "vars[sidebar]" to "full",
+                "vars[post_type]" to "wp-manga",
+                "vars[post_status]" to "publish",
+                "vars[meta_key]" to metaKey,
+                "vars[order]" to "desc",
+                "vars[meta_query][relation]" to "AND",
+                "vars[manga_archives_item_layout]" to "default",
+            ),
+        )
+        val html = response.body
+        if (html.trim().isEmpty() || html.trim() == "0") {
+            throw SourceFetchException(com.lume.app.data.locale.appString(com.lume.app.R.string.error_madara_ajax_empty))
+        }
+        return parser.parseTitleList(html, page, manifest.baseUrl)
+    }
+
+    override suspend fun search(
+        query: String,
+        page: Int,
+        filters: com.lume.app.domain.FilterList,
+    ): PagedResult<TitleSummary> {
+        val sort = (filters.filters.filterIsInstance<com.lume.app.domain.SourceFilter.Select>()
+            .firstOrNull { it.id == "orderby" }?.selectedValue) ?: "latest"
+        val path = if (page > 1) "/page/$page/" else "/"
+        val order = when (sort) {
+            "views", "popular" -> "views"
+            "trending" -> "trending"
+            "new" -> "new-manga"
+            else -> "latest"
+        }
+        // Madara search still uses s=; order applied when query empty via browse fallback
+        if (query.isBlank()) {
+            return browse(
+                page = page,
+                orderBy = if (order == "views") "views" else "latest",
+                ajaxMetaKey = if (order == "views") "_wp_manga_views" else "_latest_update",
+            )
+        }
+        val uri = URI(
+            manifest.baseUri.scheme,
+            manifest.baseUri.authority,
+            path,
+            "s=${urlEncode(query)}&post_type=wp-manga",
+            null,
+        )
+        val response = http.get(uri, source = manifest)
+        return parser.parseTitleList(response.body, page, manifest.baseUrl)
+    }
+
+    override fun getFilters(): com.lume.app.domain.FilterList = com.lume.app.domain.FilterList(
+        listOf(
+            com.lume.app.domain.SourceFilter.Select(
+                id = "orderby",
+                name = com.lume.app.data.locale.appString(com.lume.app.R.string.filter_sort),
+                options = listOf("latest", "views", "trending", "new"),
+            ),
+        ),
+    )
+
+    override suspend fun getTitle(id: String): TitleDetails {
+        val response = http.get(abs(id), source = manifest)
+        return parser.parseTitleDetails(response.body, id, manifest.baseUrl)
+    }
+
+    override suspend fun getChapters(titleId: String): List<Chapter> {
+        val response = http.get(abs(titleId), source = manifest)
+        var chapters = parser.parseChapters(response.body)
+        if (chapters.isEmpty()) {
+            val postId = postId(response.body).orEmpty()
+            val ajax = http.postForm(
+                manifest.baseUri.resolve("/wp-admin/admin-ajax.php"),
+                source = manifest,
+                headers = mapOf("X-Requested-With" to "XMLHttpRequest"),
+                form = mapOf("action" to "manga_get_chapters", "manga" to postId),
+            )
+            chapters = parser.parseChapters(ajax.body)
+        }
+        return chapters
+    }
+
+    override suspend fun getPages(chapter: Chapter): List<ComicPage> {
+        var url = chapter.url
+        if (!url.contains("style=")) url = "$url$chapterSuffix"
+        val response = http.get(abs(url), source = manifest)
+        val pages = parser.parsePages(response.body, manifest.baseUrl)
+        if (pages.isEmpty()) throw SourceFetchException(com.lume.app.data.locale.appString(com.lume.app.R.string.error_pages_failed))
+        return pages
+    }
+
+    private fun postId(html: String): String? =
+        Regex("""manga_id["\s:=]+(\d+)""").find(html)?.groupValues?.getOrNull(1)
+            ?: Regex("""id=["']post-(\d+)["']""").find(html)?.groupValues?.getOrNull(1)
+            ?: Regex("""post=(\d+)""").find(html)?.groupValues?.getOrNull(1)
+}

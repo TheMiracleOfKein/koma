@@ -1,6 +1,6 @@
-# Catalogue engines (Koma)
+# Catalogue engines (Lume)
 
-Koma does **not** load Mihon/Tachiyomi extension APKs or arbitrary DEX at runtime.
+Lume does **not** load Mihon/Tachiyomi extension APKs or arbitrary DEX at runtime.
 The unit of value is a **first-party platform engine** (Kotlin). JSON files are only
 **packs** that clone a supported family without new code.
 
