@@ -1,0 +1,12 @@
+## Copy to local.properties (gitignored) and fill in values.
+## Android Studio usually writes sdk.dir automatically.
+
+sdk.dir=C\:\\Path\\To\\Android\\sdk
+
+# OAuth application credentials (identify Koma as a client on the tracker).
+# End users log in with their own accounts; they never enter these values.
+# Leave empty if you do not need tracker login in your build.
+KOMA_ANILIST_CLIENT_ID=
+KOMA_ANILIST_CLIENT_SECRET=
+KOMA_SHIKIMORI_CLIENT_ID=
+KOMA_SHIKIMORI_CLIENT_SECRET=
