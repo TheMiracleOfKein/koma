@@ -1,7 +1,7 @@
 package com.koma.kt.ui.nav
 
+import com.koma.kt.util.urlEncode
 import java.net.URLDecoder
-import java.net.URLEncoder
 
 object Routes {
     const val Library = "library"
@@ -26,7 +26,7 @@ object Routes {
         "read/$sourceId/${encode(titleId)}/${encode(chapterId)}"
 
     fun encode(value: String): String =
-        URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+        urlEncode(value).replace("+", "%20")
 
     fun decode(value: String): String =
         URLDecoder.decode(value, "UTF-8")

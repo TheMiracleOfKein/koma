@@ -137,7 +137,7 @@ class AppHttp {
             if (!response.isSuccessful) {
                 throw SourceHttpException(response.code, uri.toString())
             }
-            response.body?.bytes() ?: ByteArray(0)
+            response.body.bytes()
         }
     }
 
@@ -151,7 +151,7 @@ class AppHttp {
     ): HttpResult = withContext(Dispatchers.IO) {
         val request = buildRequest(method, uri, source, headers, body)
         client.newCall(request).execute().use { response ->
-            val text = response.body?.string().orEmpty()
+            val text = response.body.string()
             validate(response, text, uri, checkCloudflare)
             HttpResult(response.code, text, response.request.url.toString())
         }
