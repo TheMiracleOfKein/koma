@@ -2,6 +2,7 @@ package com.koma.kt.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,10 +38,12 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.koma.kt.R
 import com.koma.kt.ui.theme.AppColors
 
 @Composable
@@ -85,8 +88,9 @@ fun QuickSearchBar(
     onSubmit: () -> Unit,
     modifier: Modifier = Modifier,
     readOnly: Boolean = false,
-    hint: String = "Быстрый поиск",
+    hint: String? = null,
 ) {
+    val resolvedHint = hint ?: stringResource(R.string.search_hint_quick)
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -107,7 +111,7 @@ fun QuickSearchBar(
         Box(modifier = Modifier.weight(1f)) {
             if (value.isEmpty()) {
                 Text(
-                    text = hint,
+                    text = resolvedHint,
                     color = AppColors.textTertiary,
                     fontSize = 14.sp,
                 )
@@ -136,32 +140,59 @@ fun QuickSearchBar(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun TitleListRow(
     title: String,
     coverUrl: String?,
+    modifier: Modifier = Modifier,
     subtitle: String? = null,
     typeLabel: String? = null,
+    badge: String? = null,
+    sourceId: String? = null,
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .then(
+                if (onLongClick != null) {
+                    Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                } else {
+                    Modifier.clickable(onClick = onClick)
+                },
+            )
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        CoverImage(url = coverUrl, width = 48.dp, height = 64.dp, radius = 6.dp)
+        CoverImage(url = coverUrl, width = 48.dp, height = 64.dp, radius = 6.dp, sourceId = sourceId)
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                color = AppColors.textPrimary,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = title,
+                    color = AppColors.textPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (!badge.isNullOrBlank()) {
+                    Text(
+                        text = badge,
+                        color = Color.Black,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(AppColors.accent)
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+            }
             val line = listOfNotNull(typeLabel, subtitle).filter { it.isNotBlank() }.joinToString(" · ")
             if (line.isNotEmpty()) {
                 Text(
@@ -235,7 +266,7 @@ fun ErrorRetryBox(
                 contentColor = Color.Black,
             ),
         ) {
-            Text("Повторить")
+            Text(stringResource(R.string.action_retry))
         }
         if (onCloudflare != null) {
             TextButton(onClick = onCloudflare) {

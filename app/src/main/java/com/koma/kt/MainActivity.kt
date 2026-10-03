@@ -1,32 +1,63 @@
 package com.koma.kt
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.lifecycleScope
 import com.koma.kt.ui.shell.KomaRoot
 import com.koma.kt.ui.theme.AppColors
 import com.koma.kt.ui.theme.KomaTheme
+import kotlinx.coroutines.launch
 
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handleOAuthIntent(intent)
         setContent {
             val darkTheme by KomaApp.instance.prefs.darkTheme.collectAsState(initial = true)
             KomaTheme(darkTheme = darkTheme) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = if (darkTheme) AppColors.background else AppColors.lightBackground,
+                    color = AppColors.background,
                 ) {
                     KomaRoot()
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleOAuthIntent(intent)
+    }
+
+    private fun handleOAuthIntent(intent: Intent?) {
+        val data: Uri = intent?.data ?: return
+        if (data.scheme != "koma" || data.host != "oauth") return
+        val code = data.getQueryParameter("code") ?: return
+        val tracker = data.pathSegments.firstOrNull() ?: return
+        lifecycleScope.launch {
+            val ok = when (tracker) {
+                "anilist" -> KomaApp.instance.trackers.anilist.exchangeCode(code)
+                "shikimori" -> KomaApp.instance.trackers.shikimori.exchangeCode(code)
+                else -> false
+            }
+            Toast.makeText(
+                this@MainActivity,
+                if (ok) getString(R.string.oauth_success, tracker)
+                else getString(R.string.oauth_error, tracker),
+                Toast.LENGTH_SHORT,
+            ).show()
         }
     }
 }

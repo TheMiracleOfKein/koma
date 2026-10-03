@@ -13,28 +13,40 @@ import com.koma.kt.domain.TitleSummary
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import java.net.URI
-import java.net.URLEncoder
+import com.koma.kt.util.urlEncode
 
 class LibSocialEngine(
     override val manifest: SourceManifest,
     private val http: AppHttp,
+    private val auth: LibAuthStore? = null,
     private val json: Json = Json { ignoreUnknownKeys = true; isLenient = true },
 ) : CatalogSource {
     private val apiBase: URI
-        get() = URI(manifest.configString("apiBase") ?: "https://api.mangalib.me/api")
+        get() = URI(manifest.configString("apiBase") ?: "https://api.cdnlibs.org/api")
 
-    private val apiHeaders: Map<String, String>
-        get() = mapOf(
+    private val siteId: String
+        get() = manifest.configString("siteId") ?: "1"
+
+    private suspend fun apiHeaders(): Map<String, String> {
+        val headers = mutableMapOf(
             "Accept" to "application/json, text/plain, */*",
-            "Site-Id" to (manifest.configString("siteId") ?: "1"),
+            "Site-Id" to siteId,
             "Client-Time-Zone" to "Europe/Moscow",
+            "Origin" to manifest.baseUrl.trimEnd('/'),
         )
+        auth?.authorizationHeader(manifest.id)?.let { headers["Authorization"] = it }
+        return headers
+    }
+
+    @Volatile
+    private var imageServerCache: String? = null
 
     override suspend fun getHome(): HomeFeed {
         val latest = getLatest()
@@ -46,31 +58,33 @@ class LibSocialEngine(
     override suspend fun getPopular(page: Int) = mangaList(page, "rating_score")
 
     private suspend fun mangaList(page: Int, sortBy: String): PagedResult<TitleSummary> {
-        val siteId = manifest.configString("siteId") ?: "1"
         val uri = URI(
             "${apiBase.toString().trimEnd('/')}/manga?page=$page&site_id[]=$siteId&sort_by=$sortBy",
         )
-        val response = http.get(uri, source = manifest, headers = apiHeaders, checkCloudflare = false)
+        val response = http.get(uri, source = manifest, headers = apiHeaders(), checkCloudflare = false)
         return parseList(response.body, page)
     }
 
-    override suspend fun search(query: String, page: Int): PagedResult<TitleSummary> {
-        val siteId = manifest.configString("siteId") ?: "1"
-        val q = URLEncoder.encode(query, "UTF-8")
+    override suspend fun search(
+        query: String,
+        page: Int,
+        filters: com.koma.kt.domain.FilterList,
+    ): PagedResult<TitleSummary> {
+        val q = urlEncode(query)
         val uri = URI("${apiBase.toString().trimEnd('/')}/manga?q=$q&page=$page&site_id[]=$siteId")
-        val response = http.get(uri, source = manifest, headers = apiHeaders, checkCloudflare = false)
+        val response = http.get(uri, source = manifest, headers = apiHeaders(), checkCloudflare = false)
         return parseList(response.body, page)
     }
+
+    override fun getFilters(): com.koma.kt.domain.FilterList = com.koma.kt.domain.FilterList()
 
     override suspend fun getTitle(id: String): TitleDetails {
         val slug = slug(id)
         val uri = URI("${apiBase.toString().trimEnd('/')}/manga/$slug")
-        val response = http.get(uri, source = manifest, headers = apiHeaders, checkCloudflare = false)
+        val response = http.get(uri, source = manifest, headers = apiHeaders(), checkCloudflare = false)
         val root = asObject(json.parseToJsonElement(response.body))
         val data = asObject(root["data"] ?: root)
-        val coverObj = data["cover"] as? JsonObject
-        val cover = coverObj?.get("default")?.jsonPrimitive?.contentOrNull
-            ?: coverObj?.get("md")?.jsonPrimitive?.contentOrNull
+        val cover = coverUrl(data["cover"])
         val genres = (data["genres"] as? JsonArray).orEmpty().mapNotNull {
             (it as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull
         }
@@ -83,7 +97,7 @@ class LibSocialEngine(
                 ?: data["name"]?.jsonPrimitive?.contentOrNull
                 ?: slug,
             altTitle = data["name"]?.jsonPrimitive?.contentOrNull,
-            coverUrl = cover?.takeIf { it.isNotEmpty() },
+            coverUrl = cover,
             description = data["summary"]?.jsonPrimitive?.contentOrNull
                 ?: data["description"]?.jsonPrimitive?.contentOrNull,
             typeLabel = nestedLabel(data["type"]),
@@ -96,7 +110,7 @@ class LibSocialEngine(
     override suspend fun getChapters(titleId: String): List<Chapter> {
         val slug = slug(titleId)
         val uri = URI("${apiBase.toString().trimEnd('/')}/manga/$slug/chapters")
-        val response = http.get(uri, source = manifest, headers = apiHeaders, checkCloudflare = false)
+        val response = http.get(uri, source = manifest, headers = apiHeaders(), checkCloudflare = false)
         val root = json.parseToJsonElement(response.body)
         val list = when {
             root is JsonArray -> root
@@ -105,32 +119,51 @@ class LibSocialEngine(
                 (root["data"] as JsonObject)["chapters"]?.jsonArray ?: JsonArray(emptyList())
             else -> JsonArray(emptyList())
         }
-        val chapters = list.mapNotNull { el ->
-            val item = el as? JsonObject ?: return@mapNotNull null
-            val volume = item["volume"]?.jsonPrimitive?.contentOrNull
-                ?: item["chapter_volume"]?.jsonPrimitive?.contentOrNull
+        val chapters = list.flatMap { el ->
+            val item = el as? JsonObject ?: return@flatMap emptyList()
+            val volume = stringOrNull(item["volume"])
+                ?: stringOrNull(item["chapter_volume"])
                 ?: ""
-            val number = item["number"]?.jsonPrimitive?.contentOrNull
-                ?: item["chapter_number"]?.jsonPrimitive?.contentOrNull
+            val number = stringOrNull(item["number"])
+                ?: stringOrNull(item["chapter_number"])
                 ?: ""
-            val name = (item["name"]?.jsonPrimitive?.contentOrNull
-                ?: item["chapter_name"]?.jsonPrimitive?.contentOrNull
+            val name = (stringOrNull(item["name"])
+                ?: stringOrNull(item["chapter_name"])
                 ?: "").trim()
-            val branchId = item["branch_id"]?.jsonPrimitive?.contentOrNull
-            val id = "/$slug/v$volume/c$number${if (branchId == null) "" else "?bid=$branchId"}"
-            Chapter(
-                id = id,
-                title = listOfNotNull(
-                    volume.takeIf { it.isNotEmpty() && it != "null" }?.let { "Том $it" },
-                    number.takeIf { it.isNotEmpty() && it != "null" }?.let { "Глава $it" },
-                    name.takeIf { it.isNotEmpty() },
-                ).joinToString(" ").trim(),
-                url = id,
-                number = number.takeIf { it != "null" },
-                volume = volume.takeIf { it != "null" },
-                branchId = branchId,
-            )
+            val branches = (item["branches"] as? JsonArray).orEmpty()
+            val branchIds: List<String?> = if (branches.isEmpty()) {
+                listOf(null)
+            } else {
+                // Prefer explicit branch_id; fall back to a single null entry (omit param).
+                // Do NOT use branches[].id — that is the chapter row id, not a branch.
+                val ids = branches.map { branchEl ->
+                    val branch = branchEl as? JsonObject ?: return@map null
+                    stringOrNull(branch["branch_id"])
+                }.distinct()
+                if (ids.any { it != null }) ids.filterNotNull().ifEmpty { listOf(null) }
+                else listOf(null)
+            }
+            branchIds.map { branchId ->
+                val bidSuffix = if (branchId.isNullOrBlank()) "" else "?bid=$branchId"
+                Chapter(
+                    id = "/$slug/v$volume/c$number$bidSuffix",
+                    title = listOfNotNull(
+                        volume.takeIf { it.isNotEmpty() && it != "null" }?.let {
+                            com.koma.kt.data.locale.appString(com.koma.kt.R.string.chapter_volume, it)
+                        },
+                        number.takeIf { it.isNotEmpty() && it != "null" }?.let {
+                            com.koma.kt.data.locale.appString(com.koma.kt.R.string.chapter_number, it)
+                        },
+                        name.takeIf { it.isNotEmpty() },
+                    ).joinToString(" ").trim().ifBlank { "Глава $number" },
+                    url = "/$slug/v$volume/c$number$bidSuffix",
+                    number = number.takeIf { it.isNotEmpty() && it != "null" },
+                    volume = volume.takeIf { it.isNotEmpty() && it != "null" },
+                    branchId = branchId?.takeIf { it.isNotBlank() },
+                )
+            }
         }
+        // API returns oldest → newest; reverse for UI (newest first), reader re-sorts.
         return chapters.asReversed()
     }
 
@@ -139,37 +172,107 @@ class LibSocialEngine(
         val volume = chapter.volume ?: "1"
         val number = chapter.number ?: "1"
         val query = buildString {
-            append("number=").append(URLEncoder.encode(number, "UTF-8"))
-            append("&volume=").append(URLEncoder.encode(volume, "UTF-8"))
-            if (chapter.branchId != null) {
-                append("&branch_id=").append(URLEncoder.encode(chapter.branchId, "UTF-8"))
+            append("number=").append(urlEncode(number))
+            append("&volume=").append(urlEncode(volume))
+            // Empty branch_id is rejected by the API — omit the param entirely when null.
+            val bid = chapter.branchId?.takeIf { it.isNotBlank() }
+                ?: chapter.id.substringAfter("bid=", "").substringBefore('&').takeIf { it.isNotBlank() }
+            if (bid != null) {
+                append("&branch_id=").append(urlEncode(bid))
             }
         }
         val uri = URI("${apiBase.toString().trimEnd('/')}/manga/$slug/chapter?$query")
-        val response = http.get(uri, source = manifest, headers = apiHeaders, checkCloudflare = false)
+        val response = http.get(uri, source = manifest, headers = apiHeaders(), checkCloudflare = false)
         val root = asObject(json.parseToJsonElement(response.body))
         val data = asObject(root["data"] ?: root)
+        if (data["toast"] != null || data["pages"] == null) {
+            val toast = (data["toast"] as? JsonObject)?.get("message")?.jsonPrimitive?.contentOrNull
+            throw SourceFetchException(
+                toast ?: com.koma.kt.data.locale.appString(
+                    com.koma.kt.R.string.error_pages_failed_named,
+                    manifest.name,
+                ),
+            )
+        }
+        val server = resolveImageServer(data)
         val pages = mutableListOf<ComicPage>()
         val rawPages = data["pages"] as? JsonArray ?: JsonArray(emptyList())
         for (page in rawPages) {
             var url: String? = when (page) {
                 is JsonPrimitive -> page.contentOrNull
-                is JsonObject -> page["url"]?.jsonPrimitive?.contentOrNull
-                    ?: page["link"]?.jsonPrimitive?.contentOrNull
-                    ?: page["src"]?.jsonPrimitive?.contentOrNull
+                is JsonObject -> stringOrNull(page["url"])
+                    ?: stringOrNull(page["link"])
+                    ?: stringOrNull(page["src"])
                 else -> null
             }
             if (url.isNullOrBlank()) continue
-            if (!url.startsWith("http")) {
-                val imageServer = data["imageServer"]?.jsonPrimitive?.contentOrNull
-                    ?: (data["servers"] as? JsonObject)?.get("main")?.jsonPrimitive?.contentOrNull
-                    ?: ""
-                if (imageServer.isNotEmpty()) url = "$imageServer$url"
-            }
+            url = absolutizePageUrl(url, server)
             pages += ComicPage(index = pages.size, imageUrl = url)
         }
-        if (pages.isEmpty()) throw SourceFetchException("Не удалось получить страницы главы MangaLib")
+        if (pages.isEmpty()) {
+            throw SourceFetchException(
+                com.koma.kt.data.locale.appString(
+                    com.koma.kt.R.string.error_pages_failed_named,
+                    manifest.name,
+                ),
+            )
+        }
         return pages
+    }
+
+    private suspend fun resolveImageServer(chapterData: JsonObject): String {
+        stringOrNull(chapterData["imageServer"])?.takeIf { it.isNotBlank() }?.let { return it.trimEnd('/') }
+        (chapterData["servers"] as? JsonObject)?.let { servers ->
+            stringOrNull(servers["main"])?.takeIf { it.isNotBlank() }?.let { return it.trimEnd('/') }
+        }
+        imageServerCache?.let { return it }
+        val site = siteId.toIntOrNull() ?: 1
+        val fallback = when (site) {
+            2 -> "https://img2.hentaicdn.org"
+            4 -> "https://img2h.hentaicdn.org"
+            else -> "https://img2.imglib.info"
+        }
+        val resolved = runCatching {
+            val uri = URI(
+                "${apiBase.toString().trimEnd('/')}/constants?fields[]=imageServers",
+            )
+            val response = http.get(uri, source = manifest, headers = apiHeaders(), checkCloudflare = false)
+            val root = asObject(json.parseToJsonElement(response.body))
+            val data = asObject(root["data"] ?: root)
+            val servers = data["imageServers"] as? JsonArray ?: return@runCatching fallback
+            val matching = servers.mapNotNull { it as? JsonObject }.filter { obj ->
+                val ids = (obj["site_ids"] as? JsonArray).orEmpty().mapNotNull {
+                    it.jsonPrimitive.contentOrNull?.toIntOrNull()
+                }
+                site in ids
+            }
+            matching.firstOrNull { stringOrNull(it["id"]) == "main" }
+                ?.let { stringOrNull(it["url"]) }
+                ?: matching.firstOrNull()?.let { stringOrNull(it["url"]) }
+                ?: fallback
+        }.getOrDefault(fallback).trimEnd('/')
+        imageServerCache = resolved
+        return resolved
+    }
+
+    private fun absolutizePageUrl(raw: String, server: String): String {
+        val trimmed = raw.trim()
+        when {
+            trimmed.startsWith("http://") || trimmed.startsWith("https://") -> return trimmed
+            trimmed.startsWith("//") && trimmed.count { it == '/' } >= 3 &&
+                !trimmed.startsWith("//manga/") && !trimmed.startsWith("//uploads/") -> {
+                // Protocol-relative host: //cdn.example/path
+                return "https:$trimmed"
+            }
+            else -> {
+                val path = when {
+                    trimmed.startsWith("//") -> "/" + trimmed.removePrefix("//")
+                    trimmed.startsWith("/") -> trimmed
+                    else -> "/$trimmed"
+                }
+                return server.trimEnd('/') + path
+            }
+        }
     }
 
     private fun parseList(raw: String, page: Int): PagedResult<TitleSummary> {
@@ -182,36 +285,47 @@ class LibSocialEngine(
         }
         val items = list.mapNotNull { el ->
             val item = el as? JsonObject ?: return@mapNotNull null
-            val slug = item["slug_url"]?.jsonPrimitive?.contentOrNull
-                ?: item["slug"]?.jsonPrimitive?.contentOrNull
-                ?: item["id"]?.jsonPrimitive?.contentOrNull
+            val slug = stringOrNull(item["slug_url"])
+                ?: stringOrNull(item["slug"])
+                ?: stringOrNull(item["id"])
                 ?: return@mapNotNull null
-            val coverObj = item["cover"] as? JsonObject
-            val cover = coverObj?.get("default")?.jsonPrimitive?.contentOrNull
-                ?: coverObj?.get("md")?.jsonPrimitive?.contentOrNull
-                ?: item["image"]?.jsonPrimitive?.contentOrNull
             TitleSummary(
                 id = "/$slug",
-                title = item["rus_name"]?.jsonPrimitive?.contentOrNull
-                    ?: item["name"]?.jsonPrimitive?.contentOrNull
+                title = stringOrNull(item["rus_name"])
+                    ?: stringOrNull(item["name"])
                     ?: slug,
-                coverUrl = cover?.takeIf { it.isNotEmpty() },
+                coverUrl = coverUrl(item["cover"])
+                    ?: stringOrNull(item["image"]),
                 typeLabel = nestedLabel(item["type"]),
-                latestChapter = item["last_chapter_number"]?.jsonPrimitive?.contentOrNull
-                    ?: item["last_chapter"]?.jsonPrimitive?.contentOrNull,
+                latestChapter = stringOrNull(item["last_chapter_number"])
+                    ?: stringOrNull(item["last_chapter"]),
             )
         }
         return PagedResult(items = items, page = page, hasNext = items.size >= 20)
     }
 
+    private fun coverUrl(el: JsonElement?): String? {
+        val coverObj = el as? JsonObject ?: return stringOrNull(el)
+        return stringOrNull(coverObj["default"])
+            ?: stringOrNull(coverObj["md"])
+            ?: stringOrNull(coverObj["thumbnail"])
+    }
+
     private fun slug(id: String): String {
         val path = id.substringBefore('?').trim('/')
+        // ids look like "7580--slug" or "7580--slug/v1/c2"
         return path.split('/').firstOrNull().orEmpty().ifEmpty { id.trim('/') }
     }
 
     private fun nestedLabel(el: JsonElement?): String? = when (el) {
-        is JsonObject -> el["label"]?.jsonPrimitive?.contentOrNull ?: el["name"]?.jsonPrimitive?.contentOrNull
+        is JsonObject -> stringOrNull(el["label"]) ?: stringOrNull(el["name"])
         is JsonPrimitive -> el.contentOrNull
+        else -> null
+    }
+
+    private fun stringOrNull(el: JsonElement?): String? = when (el) {
+        null, JsonNull -> null
+        is JsonPrimitive -> el.contentOrNull?.takeIf { it.isNotBlank() && it != "null" }
         else -> null
     }
 

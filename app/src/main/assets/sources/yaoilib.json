@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "yaoilib",
+  "name": "YaoiLib",
+  "version": "1.0.0",
+  "mediaKind": "comics",
+  "language": "ru",
+  "nsfw": true,
+  "engine": "libsocial",
+  "baseUrl": "https://yaoilib.me",
+  "headers": {
+    "Referer": "https://yaoilib.me/"
+  },
+  "engineConfig": {
+    "apiBase": "https://api.cdnlibs.org/api",
+    "siteId": "2"
+  }
+}

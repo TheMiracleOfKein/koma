@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -38,9 +39,13 @@ import com.koma.kt.ui.components.TitleListRow
 import com.koma.kt.ui.nav.Routes
 import com.koma.kt.ui.theme.AppColors
 import kotlinx.coroutines.launch
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.stringResource
+import com.koma.kt.R
 
 @Composable
 fun CatalogScreen(nav: NavHostController) {
+    val resources = LocalResources.current
     var tab by remember { mutableIntStateOf(0) }
     var items by remember { mutableStateOf<List<TitleSummary>>(emptyList()) }
     var page by remember { mutableIntStateOf(1) }
@@ -68,9 +73,12 @@ fun CatalogScreen(nav: NavHostController) {
             }
             val nextPage = if (reset) 1 else page + 1
             runCatching {
-                val source = KomaApp.instance.sources.activeSource() ?: error("Нет источников")
+                val source = KomaApp.instance.sources.activeSource() ?: error(resources.getString(R.string.error_no_sources))
                 sourceId = source.manifest.id
-                source.getLatest(nextPage)
+                when (tab) {
+                    0 -> source.getPopular(nextPage)
+                    else -> source.getLatest(nextPage)
+                }
             }.onSuccess { result ->
                 items = if (reset) result.items else items + result.items
                 page = result.page
@@ -83,7 +91,7 @@ fun CatalogScreen(nav: NavHostController) {
                 if (e is CloudflareException) {
                     cloudflareUri = e.uri
                     KomaApp.instance.http.requestChallenge(e.uri)
-                    error = "Нужна проверка Cloudflare"
+                    error = resources.getString(R.string.error_cloudflare_needed)
                 } else {
                     error = e.message ?: e.toString()
                 }
@@ -92,7 +100,7 @@ fun CatalogScreen(nav: NavHostController) {
     }
 
     LaunchedEffect(networkEpoch, refreshEpoch, tab) {
-        if (tab == 0) load(reset = true)
+        if (tab == 0 || tab == 1) load(reset = true)
     }
 
     val shouldLoadMore by remember {
@@ -103,21 +111,23 @@ fun CatalogScreen(nav: NavHostController) {
         }
     }
     LaunchedEffect(shouldLoadMore, tab) {
-        if (tab == 0 && shouldLoadMore) load(reset = false)
+        if ((tab == 0 || tab == 1) && shouldLoadMore) load(reset = false)
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(AppColors.background),
+            .background(AppColors.background)
+            .statusBarsPadding(),
     ) {
-        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp)) {
-            CatalogTab("Все обновления", selected = tab == 0, modifier = Modifier.weight(1f)) { tab = 0 }
-            CatalogTab("Мои закладки", selected = tab == 1, modifier = Modifier.weight(1f)) { tab = 1 }
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp)) {
+            CatalogTab(stringResource(R.string.catalog_tab_popular), selected = tab == 0, modifier = Modifier.weight(1f)) { tab = 0 }
+            CatalogTab(stringResource(R.string.catalog_tab_updates), selected = tab == 1, modifier = Modifier.weight(1f)) { tab = 1 }
+            CatalogTab(stringResource(R.string.catalog_tab_library), selected = tab == 2, modifier = Modifier.weight(1f)) { tab = 2 }
         }
 
         when (tab) {
-            0 -> when {
+            0, 1 -> when {
                 loading && items.isEmpty() -> LoadingBox()
                 error != null && items.isEmpty() -> ErrorRetryBox(
                     message = error!!,
@@ -151,7 +161,7 @@ fun CatalogScreen(nav: NavHostController) {
             else -> {
                 if (bookmarks.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("Нет закладок", color = AppColors.textSecondary)
+                        Text(stringResource(R.string.library_empty), color = AppColors.textSecondary)
                     }
                 } else {
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
@@ -187,7 +197,7 @@ private fun CatalogTab(
             text = label,
             color = if (selected) AppColors.accent else AppColors.textSecondary,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            fontSize = 14.sp,
+            fontSize = 13.sp,
         )
     }
 }

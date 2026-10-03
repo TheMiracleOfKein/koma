@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "hivetoons",
+  "name": "HiveToons",
+  "version": "1.0.0",
+  "mediaKind": "comics",
+  "language": "en",
+  "engine": "hivetoons",
+  "baseUrl": "https://hivetoons.org",
+  "headers": {
+    "Referer": "https://hivetoons.org/"
+  },
+  "engineConfig": {
+    "apiBase": "https://api.hivetoons.org"
+  }
+}

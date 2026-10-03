@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "mangabuff",
+  "name": "MangaBuff",
+  "version": "1.0.0",
+  "mediaKind": "comics",
+  "language": "ru",
+  "engine": "mangabuff",
+  "baseUrl": "https://mangabuff.ru",
+  "headers": {
+    "Referer": "https://mangabuff.ru/"
+  },
+  "engineConfig": {}
+}

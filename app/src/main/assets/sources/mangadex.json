@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "mangadex",
+  "name": "MangaDex",
+  "version": "1.0.0",
+  "mediaKind": "comics",
+  "language": "multi",
+  "engine": "mangadex",
+  "baseUrl": "https://mangadex.org",
+  "headers": {
+    "Referer": "https://mangadex.org/"
+  },
+  "engineConfig": {
+    "apiBase": "https://api.mangadex.org",
+    "languages": "en,ru"
+  }
+}

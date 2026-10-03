@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".KomaApp"
@@ -12,15 +14,38 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:supportsRtl="true"
         android:theme="@style/Theme.KomaKt"
+        android:localeConfig="@xml/locales_config"
+        tools:targetApi="33"
         android:usesCleartextTraffic="false">
+        <activity
+            android:name=".ui.source.SourceLoginActivity"
+            android:exported="false"
+            android:theme="@style/Theme.KomaKt" />
+        <activity
+            android:name=".ui.tracker.TrackerAuthActivity"
+            android:exported="false"
+            android:theme="@style/Theme.KomaKt" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.KomaKt">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="koma" android:host="oauth" android:pathPrefix="/anilist" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="koma" android:host="oauth" android:pathPrefix="/shikimori" />
             </intent-filter>
         </activity>
     </application>

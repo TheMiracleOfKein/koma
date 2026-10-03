@@ -1,3 +1,5 @@
+@file:Suppress("UnstableApiUsage") // dependencyResolutionManagement / RepositoriesMode still @Incubating
+
 pluginManagement {
     repositories {
         google()
@@ -14,5 +16,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "KomaKt"
+rootProject.name = "Koma"
 include(":app")

@@ -18,6 +18,7 @@ data class SourceManifest(
     val mediaKind: String = "comics",
     val language: String? = null,
     val icon: String? = null,
+    val nsfw: Boolean = false,
     val headers: Map<String, String> = emptyMap(),
     val engineConfig: JsonObject = JsonObject(emptyMap()),
 ) {
@@ -35,15 +36,39 @@ data class SourceManifest(
     }
 }
 
+/**
+ * CatalogueSource — Mihon-inspired contract, native to Koma.
+ * Engines are first-party Kotlin; JSON packs only clone family engines.
+ * No DEX / ExtensionLoader plugins.
+ */
 interface CatalogSource {
     val manifest: SourceManifest
+
+    val supportsLatest: Boolean get() = true
+    val supportsPopular: Boolean get() = true
+
     suspend fun getHome(): HomeFeed
     suspend fun getLatest(page: Int = 1): PagedResult<TitleSummary>
     suspend fun getPopular(page: Int = 1): PagedResult<TitleSummary>
-    suspend fun search(query: String, page: Int = 1): PagedResult<TitleSummary>
+
+    /** Default filters for this source (may be empty). */
+    fun getFilters(): FilterList = FilterList()
+
+    suspend fun search(
+        query: String,
+        page: Int = 1,
+        filters: FilterList = FilterList(),
+    ): PagedResult<TitleSummary>
+
     suspend fun getTitle(id: String): TitleDetails
     suspend fun getChapters(titleId: String): List<Chapter>
     suspend fun getPages(chapter: Chapter): List<ComicPage>
+}
+
+/** Optional per-source preferences screen hook. */
+@Suppress("unused")
+interface ConfigurableSource {
+    fun preferenceKeys(): List<String>
 }
 
 class CloudflareException(val uri: URI) : Exception("Cloudflare challenge: $uri")

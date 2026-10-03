@@ -1,6 +1,7 @@
 package com.koma.kt.data.source
 
 import android.content.Context
+import com.koma.kt.R
 import com.koma.kt.data.db.LibraryDao
 import com.koma.kt.data.db.SourcePackEntity
 import com.koma.kt.data.network.AppHttp
@@ -20,6 +21,7 @@ class SourceRegistry(
     private val http: AppHttp,
     private val prefs: AppPreferences,
     private val dao: LibraryDao,
+    private val libAuth: LibAuthStore? = null,
     private val json: Json = Json { ignoreUnknownKeys = true; isLenient = true },
 ) {
     private val bundledIds = mutableSetOf<String>()
@@ -28,7 +30,7 @@ class SourceRegistry(
 
     val activeSourceId: Flow<String?> = prefs.activeSourceId
 
-    fun isBundled(id: String): Boolean = id in bundledIds
+    fun isBundled(id: String): Boolean = id in bundledIds || id == "local"
 
     suspend fun load() {
         bundledIds.clear()
@@ -43,12 +45,16 @@ class SourceRegistry(
         for (pack in dao.allSourcePacks()) {
             runCatching {
                 val manifest = json.decodeFromString(SourceManifest.serializer(), pack.json)
+                // Legacy packs for non-family engines still load if already installed.
                 upsert(loaded, createEngine(manifest))
             }
         }
+        upsert(loaded, LocalEngine(context))
+        bundledIds += "local"
         _sources.value = loaded
         if (prefs.activeSourceId.first() == null && loaded.isNotEmpty()) {
-            setActive(loaded.first().manifest.id)
+            val preferred = loaded.firstOrNull { it.manifest.id != "local" } ?: loaded.first()
+            setActive(preferred.manifest.id)
         }
     }
 
@@ -65,9 +71,19 @@ class SourceRegistry(
             ?: _sources.value.firstOrNull()
     }
 
+    /**
+     * Install a JSON source pack. Only family engines (madara / libsocial / hivetoons)
+     * may be imported — new platform engines require an app update.
+     */
     suspend fun importJson(raw: String): SourceManifest {
         val manifest = json.decodeFromString(SourceManifest.serializer(), raw)
-        createEngine(manifest) // validate engine
+        if (!SourceEngines.isPackImportable(manifest.engine)) {
+            error(SourceEngines.importRejectedMessage(context, manifest.engine))
+        }
+        if (manifest.id == "local") {
+            error(context.getString(R.string.import_reject_local))
+        }
+        createEngine(manifest) // validate engine wiring
         dao.upsertSourcePack(
             SourcePackEntity(
                 id = manifest.id,
@@ -102,8 +118,23 @@ class SourceRegistry(
     }
 
     private fun createEngine(manifest: SourceManifest): CatalogSource = when (manifest.engine) {
-        "madara" -> MadaraEngine(manifest, http)
-        "libsocial" -> LibSocialEngine(manifest, http)
-        else -> error("Unknown engine: ${manifest.engine}")
+        SourceEngines.MADARA -> MadaraEngine(manifest, http)
+        SourceEngines.LIBSOCIAL -> LibSocialEngine(manifest, http, libAuth)
+        SourceEngines.MANGADEX -> MangaDexEngine(manifest, http)
+        SourceEngines.MANGAKATANA -> MangaKatanaEngine(manifest, http)
+        SourceEngines.ASURA -> AsuraEngine(manifest, http)
+        SourceEngines.WEEBCENTRAL -> WeebCentralEngine(manifest, http)
+        SourceEngines.DEMONIC -> DemonicEngine(manifest, http)
+        SourceEngines.HIVETOONS -> HiveToonsEngine(manifest, http)
+        SourceEngines.REMANGA -> RemangaEngine(manifest, http)
+        SourceEngines.MANGABUFF -> MangaBuffEngine(manifest, http)
+        SourceEngines.LOCAL -> LocalEngine(context)
+        else -> error(
+            if (SourceEngines.isKnown(manifest.engine)) {
+                "Engine wiring missing for ${manifest.engine}"
+            } else {
+                "Unknown engine: ${manifest.engine}. New engines ship with app updates."
+            },
+        )
     }
 }

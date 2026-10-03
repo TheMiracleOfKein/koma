@@ -1,6 +1,7 @@
 package com.koma.kt.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -17,14 +19,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -39,12 +44,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import com.koma.kt.KomaApp
+import com.koma.kt.R
 import com.koma.kt.data.db.BookmarkEntity
+import com.koma.kt.data.tracker.TrackerSearchResult
 import com.koma.kt.domain.Chapter
 import com.koma.kt.domain.CloudflareException
 import com.koma.kt.domain.TitleDetails
@@ -58,6 +67,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TitleScreen(nav: NavHostController, sourceId: String, titleId: String) {
+    val resources = LocalResources.current
     var details by remember { mutableStateOf<TitleDetails?>(null) }
     var chapters by remember { mutableStateOf<List<Chapter>>(emptyList()) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -65,22 +75,37 @@ fun TitleScreen(nav: NavHostController, sourceId: String, titleId: String) {
     var loading by remember { mutableStateOf(true) }
     var bookmarked by remember { mutableStateOf(false) }
     var refreshEpoch by remember { mutableIntStateOf(0) }
+    var showTrackers by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val dao = KomaApp.instance.dao
     val networkEpoch by KomaApp.instance.http.networkEpoch.collectAsState()
     var progressState by remember { mutableStateOf<com.koma.kt.data.db.ProgressEntity?>(null) }
+    val links by dao.observeTrackerLinks(sourceId, titleId).collectAsState(initial = emptyList())
 
     LaunchedEffect(sourceId, titleId, networkEpoch, refreshEpoch) {
         loading = true
         error = null
         cloudflareUri = null
         runCatching {
+            val offline = KomaApp.instance.offlineCache
+            val cached = offline.get(sourceId, titleId)
             val source = KomaApp.instance.sources.sourceById(sourceId)
-                ?: error("Источник не найден")
-            val d = source.getTitle(titleId)
-            val c = source.getChapters(titleId)
+            val d = cached?.details
+                ?: source?.let { runCatching { it.getTitle(titleId) }.getOrNull() }
+                ?: offline.detailsFromDownloads(sourceId, titleId)
+                ?: error(resources.getString(R.string.error_no_title_data))
+            val c = cached?.chapters
+                ?: source?.let { runCatching { it.getChapters(titleId) }.getOrNull() }
+                ?: offline.chaptersFromDownloads(sourceId, titleId)
+            if (source != null && c.isNotEmpty()) {
+                offline.save(sourceId, titleId, d, c)
+            }
             bookmarked = dao.getBookmark(sourceId, titleId) != null
             progressState = dao.getProgress(sourceId, titleId)
+            val meta = dao.getTitleMeta(sourceId, titleId)
+            if (meta != null && meta.unreadNewCount > 0) {
+                dao.upsertTitleMeta(meta.copy(unreadNewCount = 0))
+            }
             d to c
         }.onSuccess { (d, c) ->
             details = d
@@ -91,7 +116,7 @@ fun TitleScreen(nav: NavHostController, sourceId: String, titleId: String) {
             if (e is CloudflareException) {
                 cloudflareUri = e.uri
                 scope.launch { KomaApp.instance.http.requestChallenge(e.uri) }
-                error = "Нужна проверка Cloudflare"
+                error = resources.getString(R.string.error_cloudflare_needed)
             } else {
                 error = e.message ?: e.toString()
             }
@@ -102,7 +127,13 @@ fun TitleScreen(nav: NavHostController, sourceId: String, titleId: String) {
         containerColor = AppColors.background,
         topBar = {
             TopAppBar(
-                title = { Text(details?.title ?: "Тайтл", color = AppColors.textPrimary, maxLines = 1) },
+                title = {
+                    Text(
+                        details?.title ?: stringResource(R.string.title_fallback),
+                        color = AppColors.textPrimary,
+                        maxLines = 1,
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = { nav.popBackStack() }) {
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, null, tint = AppColors.textPrimary)
@@ -133,7 +164,7 @@ fun TitleScreen(nav: NavHostController, sourceId: String, titleId: String) {
                     ) {
                         Icon(
                             if (bookmarked) Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,
-                            contentDescription = "Закладка",
+                            contentDescription = stringResource(R.string.cd_bookmark),
                             tint = if (bookmarked) AppColors.accent else AppColors.textPrimary,
                         )
                     }
@@ -181,7 +212,12 @@ fun TitleScreen(nav: NavHostController, sourceId: String, titleId: String) {
                                 Text(it, color = AppColors.textSecondary, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
                             }
                             d.status?.let {
-                                Text("Статус: $it", color = AppColors.textSecondary, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+                                Text(
+                                    stringResource(R.string.title_status, it),
+                                    color = AppColors.textSecondary,
+                                    fontSize = 13.sp,
+                                    modifier = Modifier.padding(top = 8.dp),
+                                )
                             }
                             d.typeLabel?.let {
                                 Text(it, color = AppColors.textTertiary, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
@@ -201,7 +237,13 @@ fun TitleScreen(nav: NavHostController, sourceId: String, titleId: String) {
                                 ),
                                 enabled = chapters.isNotEmpty(),
                             ) {
-                                Text(if (progressState != null) "Продолжить" else "Читать")
+                                Text(
+                                    if (progressState != null) {
+                                        stringResource(R.string.action_continue)
+                                    } else {
+                                        stringResource(R.string.action_read)
+                                    },
+                                )
                             }
                         }
                     }
@@ -210,7 +252,22 @@ fun TitleScreen(nav: NavHostController, sourceId: String, titleId: String) {
                         onClick = { nav.navigate(Routes.chapters(sourceId, titleId)) },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text("Список глав (${chapters.size})", color = AppColors.textPrimary)
+                        Text(
+                            stringResource(R.string.title_chapters_list, chapters.size),
+                            color = AppColors.textPrimary,
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { showTrackers = true },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        val linked = if (links.isEmpty()) {
+                            stringResource(R.string.none_short)
+                        } else {
+                            links.joinToString { it.tracker }
+                        }
+                        Text(stringResource(R.string.title_trackers, linked), color = AppColors.textPrimary)
                     }
                     if (d.genres.isNotEmpty()) {
                         Spacer(Modifier.height(12.dp))
@@ -231,7 +288,11 @@ fun TitleScreen(nav: NavHostController, sourceId: String, titleId: String) {
                     }
                     d.description?.let {
                         Spacer(Modifier.height(16.dp))
-                        Text("Описание", color = AppColors.textPrimary, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            stringResource(R.string.title_description),
+                            color = AppColors.textPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                         Spacer(Modifier.height(8.dp))
                         Text(it, color = AppColors.textSecondary, fontSize = 14.sp, lineHeight = 20.sp)
                     }
@@ -239,4 +300,269 @@ fun TitleScreen(nav: NavHostController, sourceId: String, titleId: String) {
             }
         }
     }
+
+    if (showTrackers) {
+        TrackersDialog(
+            sourceId = sourceId,
+            titleId = titleId,
+            titleName = details?.title.orEmpty(),
+            chapters = chapters,
+            coverUrl = details?.coverUrl,
+            typeLabel = details?.typeLabel,
+            onDismiss = { showTrackers = false },
+            onSynced = { progressState = dao.getProgress(sourceId, titleId) },
+        )
+    }
+}
+
+@Composable
+private fun TrackersDialog(
+    sourceId: String,
+    titleId: String,
+    titleName: String,
+    chapters: List<Chapter>,
+    coverUrl: String?,
+    typeLabel: String?,
+    onDismiss: () -> Unit,
+    onSynced: suspend () -> Unit = {},
+) {
+    val resources = LocalResources.current
+    val trackers = KomaApp.instance.trackers.all
+    var selectedTracker by remember { mutableStateOf(trackers.first()) }
+    var query by remember { mutableStateOf(titleName) }
+    var results by remember { mutableStateOf<List<TrackerSearchResult>>(emptyList()) }
+    var manualId by remember { mutableStateOf("") }
+    var loading by remember { mutableStateOf(false) }
+    var syncing by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var remotePreview by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    val links by KomaApp.instance.dao.observeTrackerLinks(sourceId, titleId)
+        .collectAsState(initial = emptyList())
+    val scroll = rememberScrollState()
+
+    LaunchedEffect(selectedTracker.id, links) {
+        val linked = links.firstOrNull { it.tracker == selectedTracker.id }
+        if (linked == null) {
+            remotePreview = null
+            return@LaunchedEffect
+        }
+        if (!selectedTracker.isLoggedIn()) {
+            remotePreview = resources.getString(R.string.tracker_preview_login, linked.remoteId)
+            return@LaunchedEffect
+        }
+        remotePreview = resources.getString(R.string.tracker_preview_loading, linked.remoteId)
+        val remote = runCatching { selectedTracker.fetchProgress(linked.remoteId) }.getOrNull()
+        remotePreview = if (remote == null) {
+            resources.getString(R.string.tracker_preview_unavailable, linked.remoteId)
+        } else {
+            val ch = remote.chaptersRead.toString()
+            remote.status?.let {
+                resources.getString(R.string.tracker_preview_progress_status, linked.remoteId, ch, it)
+            } ?: resources.getString(R.string.tracker_preview_progress, linked.remoteId, ch)
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.dialog_trackers)) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 480.dp)
+                    .verticalScroll(scroll),
+            ) {
+                message?.let { text ->
+                    Text(
+                        text = text,
+                        color = AppColors.accent,
+                        fontSize = 13.sp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(AppColors.surface)
+                            .padding(10.dp),
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                    trackers.forEach { t ->
+                        val selected = t.id == selectedTracker.id
+                        Text(
+                            text = t.displayName,
+                            color = if (selected) AppColors.accent else AppColors.textSecondary,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                            modifier = Modifier
+                                .padding(end = 12.dp)
+                                .clickable { selectedTracker = t }
+                                .padding(vertical = 6.dp),
+                        )
+                    }
+                }
+                val linked = links.firstOrNull { it.tracker == selectedTracker.id }
+                if (linked != null) {
+                    Text(
+                        remotePreview ?: stringResource(R.string.tracker_linked, linked.remoteId),
+                        color = AppColors.textSecondary,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(vertical = 6.dp),
+                    )
+                    TextButton(
+                        onClick = {
+                            scope.launch {
+                                selectedTracker.unlink(sourceId, titleId)
+                                message = resources.getString(R.string.tracker_unlinked)
+                            }
+                        },
+                    ) { Text(stringResource(R.string.action_unlink)) }
+                } else {
+                    Text(
+                        stringResource(R.string.tracker_not_linked),
+                        color = AppColors.textTertiary,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(vertical = 6.dp),
+                    )
+                }
+                Button(
+                    onClick = {
+                        scope.launch {
+                            syncing = true
+                            message = resources.getString(R.string.tracker_syncing)
+                            val result = runCatching {
+                                KomaApp.instance.trackerSync.syncTitle(
+                                    sourceId = sourceId,
+                                    titleId = titleId,
+                                    chapters = chapters,
+                                    titleName = titleName,
+                                    coverUrl = coverUrl,
+                                    typeLabel = typeLabel,
+                                )
+                            }
+                            message = result.fold(
+                                onSuccess = { it.displayText() },
+                                onFailure = {
+                                    resources.getString(R.string.error_prefix, it.message ?: it.toString())
+                                },
+                            )
+                            runCatching { onSynced() }
+                            syncing = false
+                            val link = KomaApp.instance.dao.getTrackerLinks(sourceId, titleId)
+                                .firstOrNull { it.tracker == selectedTracker.id }
+                            if (link != null && selectedTracker.isLoggedIn()) {
+                                val remote = runCatching {
+                                    selectedTracker.fetchProgress(link.remoteId)
+                                }.getOrNull()
+                                if (remote != null) {
+                                    val ch = remote.chaptersRead.toString()
+                                    remotePreview = remote.status?.let {
+                                        resources.getString(
+                                            R.string.tracker_preview_progress_status,
+                                            link.remoteId,
+                                            ch,
+                                            it,
+                                        )
+                                    } ?: resources.getString(
+                                        R.string.tracker_preview_progress,
+                                        link.remoteId,
+                                        ch,
+                                    )
+                                }
+                            }
+                            scroll.animateScrollTo(0)
+                        }
+                    },
+                    enabled = !syncing && linked != null,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AppColors.accent,
+                        contentColor = Color.Black,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        if (syncing) {
+                            stringResource(R.string.tracker_syncing)
+                        } else {
+                            stringResource(R.string.action_sync)
+                        },
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.label_search)) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        scope.launch {
+                            loading = true
+                            message = null
+                            results = runCatching { selectedTracker.search(query) }
+                                .onFailure { message = it.message }
+                                .getOrDefault(emptyList())
+                            if (results.isEmpty() && message == null) {
+                                message = resources.getString(R.string.search_empty)
+                            }
+                            loading = false
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AppColors.accent,
+                        contentColor = Color.Black,
+                    ),
+                ) {
+                    Text(
+                        if (loading) stringResource(R.string.ellipsis)
+                        else stringResource(R.string.action_search),
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                results.forEach { item ->
+                    Text(
+                        text = item.title,
+                        color = AppColors.textPrimary,
+                        fontSize = 14.sp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                scope.launch {
+                                    selectedTracker.link(
+                                        sourceId,
+                                        titleId,
+                                        item.remoteId,
+                                        item.url,
+                                    )
+                                    message = resources.getString(R.string.tracker_linked_with, item.title)
+                                }
+                            }
+                            .padding(vertical = 8.dp),
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = manualId,
+                    onValueChange = { manualId = it },
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.label_manual_id)) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                TextButton(
+                    onClick = {
+                        val id = manualId.trim()
+                        if (id.isEmpty()) return@TextButton
+                        scope.launch {
+                            selectedTracker.link(sourceId, titleId, id)
+                            message = resources.getString(R.string.tracker_linked, id)
+                        }
+                    },
+                ) { Text(stringResource(R.string.action_bind_id)) }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_close)) }
+        },
+    )
 }

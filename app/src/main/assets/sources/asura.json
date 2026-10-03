@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "asura",
+  "name": "Asura Scans",
+  "version": "1.0.0",
+  "mediaKind": "comics",
+  "language": "en",
+  "engine": "asura",
+  "baseUrl": "https://asuracomic.net",
+  "headers": {
+    "Referer": "https://asuracomic.net/"
+  },
+  "engineConfig": {
+    "apiBase": "https://api.asurascans.com/api"
+  }
+}

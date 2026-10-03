@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "demonicscans",
+  "name": "Demonic Scans",
+  "version": "1.0.0",
+  "mediaKind": "comics",
+  "language": "en",
+  "engine": "demonic",
+  "baseUrl": "https://demonicscans.org",
+  "headers": {
+    "Referer": "https://demonicscans.org/"
+  },
+  "engineConfig": {}
+}

@@ -3,6 +3,10 @@ package com.koma.kt.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -13,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -60,20 +65,33 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
+import coil.imageLoader
+import coil.request.CachePolicy
+import coil.request.ImageRequest
 import com.koma.kt.KomaApp
+import com.koma.kt.R
 import com.koma.kt.data.db.BookmarkEntity
 import com.koma.kt.data.db.ChapterReadEntity
 import com.koma.kt.data.db.ProgressEntity
@@ -83,12 +101,17 @@ import com.koma.kt.domain.CloudflareException
 import com.koma.kt.domain.ComicPage
 import com.koma.kt.domain.ReaderMode
 import com.koma.kt.domain.ReaderTheme
+import com.koma.kt.domain.inReadingOrder
 import com.koma.kt.ui.components.ErrorRetryBox
 import com.koma.kt.ui.components.LoadingBox
 import com.koma.kt.ui.nav.Routes
 import com.koma.kt.ui.theme.AppColors
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -99,7 +122,9 @@ fun ReaderScreen(
     titleId: String,
     chapterId: String,
 ) {
-    var pages by remember { mutableStateOf<List<ComicPage>>(emptyList()) }
+    val context = LocalContext.current
+    val resources = LocalResources.current
+    var loadedChapters by remember { mutableStateOf<List<LoadedChapter>>(emptyList()) }
     var chapter by remember { mutableStateOf<Chapter?>(null) }
     var chapters by remember { mutableStateOf<List<Chapter>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -113,11 +138,42 @@ fun ReaderScreen(
     var bookmarked by remember { mutableStateOf(false) }
     var pageIndex by remember { mutableIntStateOf(0) }
     var refreshEpoch by remember { mutableIntStateOf(0) }
+    val prefetchMutex = remember { Mutex() }
     val scope = rememberCoroutineScope()
     val dao = KomaApp.instance.dao
     val networkEpoch by KomaApp.instance.http.networkEpoch.collectAsState()
-    val readerSettings by KomaApp.instance.prefs.readerSettings.collectAsState(initial = ReaderSettings())
+    val readerSettingsGlobal by KomaApp.instance.prefs.readerSettings.collectAsState(initial = ReaderSettings())
+    var readerSettings by remember { mutableStateOf(ReaderSettings()) }
     val systemDark = isSystemInDarkTheme()
+    val stripItems = remember(loadedChapters) { buildReaderStrip(loadedChapters) }
+
+    fun chapterIdsMatch(a: String, b: String): Boolean =
+        a == b || a.trimEnd('/') == b.trimEnd('/')
+
+    fun warmPageImages(pages: List<ComicPage>) {
+        val loader = context.imageLoader
+        pages.forEach { page ->
+            val data: Any = if (page.imageUrl.startsWith("http")) page.imageUrl else File(page.imageUrl)
+            loader.enqueue(
+                ImageRequest.Builder(context)
+                    .data(data)
+                    .memoryCachePolicy(CachePolicy.ENABLED)
+                    .diskCachePolicy(CachePolicy.ENABLED)
+                    .crossfade(false)
+                    .build(),
+            )
+        }
+    }
+
+    LaunchedEffect(readerSettingsGlobal, sourceId, titleId) {
+        val titlePrefs = dao.getTitlePrefs(sourceId, titleId)
+        readerSettings = readerSettingsGlobal.copy(
+            mode = titlePrefs?.readerMode?.let { ReaderMode.fromPrefs(it) } ?: readerSettingsGlobal.mode,
+            theme = titlePrefs?.readerTheme?.let { ReaderTheme.entries.getOrElse(it) { readerSettingsGlobal.theme } }
+                ?: readerSettingsGlobal.theme,
+            gap = titlePrefs?.gap ?: readerSettingsGlobal.gap,
+        )
+    }
 
     val readerBg = when (readerSettings.theme) {
         ReaderTheme.Light -> Color(0xFFF2F2F2)
@@ -125,38 +181,97 @@ fun ReaderScreen(
         ReaderTheme.System -> if (systemDark) Color.Black else Color(0xFFF2F2F2)
     }
 
+    suspend fun loadPagesFor(ch: Chapter): List<ComicPage> = withContext(Dispatchers.IO) {
+        val source = KomaApp.instance.sources.sourceById(sourceId)
+        val local = KomaApp.instance.downloads.localPages(sourceId, titleId, ch.id)
+        local ?: source?.getPages(ch)
+            ?: error(resources.getString(R.string.error_no_pages_offline))
+    }
+
+    /** Keep at least [ahead] chapter(s) after the last loaded one; warm Coil cache. */
+    suspend fun prefetchNextChapter(ahead: Int = 1) {
+        if (!readerSettings.seamlessReading) return
+        prefetchMutex.withLock {
+            repeat(ahead) {
+                val list = chapters
+                val loaded = loadedChapters
+                if (list.isEmpty() || loaded.isEmpty()) return@withLock
+                val lastId = loaded.last().chapter.id
+                val idx = list.indexOfFirst { chapterIdsMatch(it.id, lastId) }
+                if (idx < 0) return@withLock
+                val next = list.getOrNull(idx + 1) ?: return@withLock
+                if (loaded.any { chapterIdsMatch(it.chapter.id, next.id) }) return@withLock
+                val pages = runCatching { loadPagesFor(next) }.getOrNull() ?: return@withLock
+                if (pages.isEmpty()) return@withLock
+                if (loadedChapters.any { chapterIdsMatch(it.chapter.id, next.id) }) return@withLock
+                loadedChapters = loadedChapters + LoadedChapter(next, pages)
+                warmPageImages(pages)
+            }
+        }
+    }
+
+    fun maybePrefetchFromProgress(visibleStripIndex: Int, stripSize: Int) {
+        if (!readerSettings.seamlessReading || stripSize <= 0) return
+        val remaining = stripSize - 1 - visibleStripIndex
+        // Start well before the end so network + decode finish while user still scrolls.
+        if (remaining <= 12) {
+            scope.launch { prefetchNextChapter(ahead = 1) }
+        }
+    }
+
     LaunchedEffect(sourceId, titleId, chapterId, networkEpoch, refreshEpoch) {
         loading = true
         error = null
         cloudflareUri = null
+        loadedChapters = emptyList()
         runCatching {
-            val source = KomaApp.instance.sources.sourceById(sourceId) ?: error("Нет источника")
-            val details = source.getTitle(titleId)
+            val source = KomaApp.instance.sources.sourceById(sourceId)
+            val offline = KomaApp.instance.offlineCache
+            val cached = offline.get(sourceId, titleId)
+            val details = cached?.details
+                ?: source?.let { runCatching { it.getTitle(titleId) }.getOrNull() }
+                ?: offline.detailsFromDownloads(sourceId, titleId)
+                ?: error(resources.getString(R.string.error_no_title_offline))
             titleName = details.title
             coverUrl = details.coverUrl
             typeLabel = details.typeLabel
             bookmarked = dao.getBookmark(sourceId, titleId) != null
-            val list = source.getChapters(titleId)
+            val rawList = cached?.chapters
+                ?: source?.let { runCatching { it.getChapters(titleId) }.getOrNull() }
+                ?: offline.chaptersFromDownloads(sourceId, titleId)
+            if (rawList.isEmpty()) error(resources.getString(R.string.error_no_chapters))
+            // Keep source order in cache; reader always uses oldest → newest.
+            if (source != null && cached == null) {
+                offline.save(sourceId, titleId, details, rawList)
+            }
+            val list = rawList.inReadingOrder()
             chapters = list
             val ch = list.firstOrNull { it.id == chapterId }
                 ?: list.firstOrNull { it.id.trimEnd('/') == chapterId.trimEnd('/') }
-                ?: error("Глава не найдена")
+                ?: error(resources.getString(R.string.error_chapter_not_found))
             chapter = ch
-            val local = KomaApp.instance.downloads.localPages(sourceId, titleId, ch.id)
-            val loaded = local ?: source.getPages(ch)
+            val loaded = loadPagesFor(ch)
             val progress = dao.getProgress(sourceId, titleId)
             if (progress?.chapterId == ch.id) {
                 pageIndex = progress.pageIndex.coerceIn(0, (loaded.size - 1).coerceAtLeast(0))
+            } else {
+                pageIndex = 0
             }
-            loaded
-        }.onSuccess {
-            pages = it
+            LoadedChapter(ch, loaded)
+        }.onSuccess { first ->
+            loadedChapters = listOf(first)
             loading = false
-            chapter?.let { ch ->
-                scope.launch {
-                    dao.markChapterRead(
-                        ChapterReadEntity(sourceId = sourceId, titleId = titleId, chapterId = ch.id),
-                    )
+            warmPageImages(first.pages)
+            scope.launch {
+                dao.markChapterRead(
+                    ChapterReadEntity(sourceId = sourceId, titleId = titleId, chapterId = first.chapter.id),
+                )
+                runCatching {
+                    KomaApp.instance.trackerSync.pushProgress(sourceId, titleId, chapters, first.chapter.id)
+                }
+                // Prefetch next chapter + its images while the user still reads this one.
+                if (readerSettings.seamlessReading) {
+                    prefetchNextChapter(ahead = 1)
                 }
             }
         }.onFailure { e ->
@@ -164,17 +279,31 @@ fun ReaderScreen(
             if (e is CloudflareException) {
                 cloudflareUri = e.uri
                 scope.launch { KomaApp.instance.http.requestChallenge(e.uri) }
-                error = "Нужна проверка Cloudflare"
+                error = resources.getString(R.string.error_cloudflare_needed)
             } else {
                 error = e.message ?: e.toString()
             }
         }
     }
 
-    fun saveProgress(index: Int) {
-        val ch = chapter ?: return
-        if (pages.isEmpty()) return
-        pageIndex = index
+    // If user turns seamless on mid-session, kick off prefetch once.
+    LaunchedEffect(readerSettings.seamlessReading) {
+        if (readerSettings.seamlessReading && loadedChapters.isNotEmpty()) {
+            prefetchNextChapter(ahead = 1)
+        }
+    }
+
+    fun onVisiblePage(ch: Chapter, indexInChapter: Int, chapterPageCount: Int) {
+        val chapterChanged = chapter?.id != ch.id
+        if (!chapterChanged && pageIndex == indexInChapter) return
+        pageIndex = indexInChapter
+        chapter = ch
+        // When entering a chapter that is the last loaded one, pull the following chapter.
+        if (readerSettings.seamlessReading &&
+            loadedChapters.lastOrNull()?.let { chapterIdsMatch(it.chapter.id, ch.id) } == true
+        ) {
+            scope.launch { prefetchNextChapter(ahead = 1) }
+        }
         scope.launch {
             dao.upsertProgress(
                 ProgressEntity(
@@ -186,21 +315,33 @@ fun ReaderScreen(
                     chapterId = ch.id,
                     chapterName = ch.title,
                     chapterUrl = ch.url,
-                    pageIndex = index,
-                    pageCount = pages.size,
+                    pageIndex = indexInChapter,
+                    pageCount = chapterPageCount,
                 ),
             )
+            if (chapterChanged) {
+                dao.markChapterRead(
+                    ChapterReadEntity(sourceId = sourceId, titleId = titleId, chapterId = ch.id),
+                )
+                runCatching {
+                    KomaApp.instance.trackerSync.pushProgress(sourceId, titleId, chapters, ch.id)
+                }
+            }
         }
     }
 
     fun goChapter(delta: Int) {
         val ch = chapter ?: return
-        val idx = chapters.indexOfFirst { it.id == ch.id }
+        val idx = chapters.indexOfFirst { chapterIdsMatch(it.id, ch.id) }
         if (idx < 0) return
         val next = chapters.getOrNull(idx + delta) ?: return
         nav.navigate(Routes.reader(sourceId, titleId, next.id)) {
             popUpTo(Routes.reader(sourceId, titleId, chapterId)) { inclusive = true }
         }
+    }
+
+    fun openTitle() {
+        nav.navigate(Routes.title(sourceId, titleId))
     }
 
     fun toggleBookmark() {
@@ -239,39 +380,90 @@ fun ReaderScreen(
             )
             else -> {
                 val toggleChrome = { chromeVisible = !chromeVisible }
+                val chapterPageCount = loadedChapters.firstOrNull { it.chapter.id == chapter?.id }?.pages?.size
+                    ?: stripItems.filterIsInstance<ReaderStripItem.Page>()
+                        .firstOrNull { it.chapter.id == chapter?.id }?.chapterPageCount
+                    ?: 0
                 when (readerSettings.mode) {
                     ReaderMode.Webtoon -> {
                         val listState = rememberLazyListState(
-                            initialFirstVisibleItemIndex = pageIndex.coerceIn(0, (pages.size - 1).coerceAtLeast(0)),
+                            initialFirstVisibleItemIndex = pageIndex.coerceIn(0, (stripItems.size - 1).coerceAtLeast(0)),
                         )
-                        LaunchedEffect(listState) {
-                            snapshotFlow { listState.firstVisibleItemIndex }
+                        LaunchedEffect(listState, stripItems) {
+                            snapshotFlow {
+                                val idx = listState.firstVisibleItemIndex
+                                val item = stripItems.getOrNull(idx)
+                                val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: idx
+                                Triple(item, lastVisible, stripItems.size)
+                            }
                                 .distinctUntilChanged()
-                                .collect { saveProgress(it) }
+                                .collect { (item, lastVisible, total) ->
+                                    when (item) {
+                                        is ReaderStripItem.Page -> onVisiblePage(
+                                            item.chapter,
+                                            item.indexInChapter,
+                                            item.chapterPageCount,
+                                        )
+                                        is ReaderStripItem.Divider -> onVisiblePage(item.chapter, 0, 1)
+                                        null -> Unit
+                                    }
+                                    maybePrefetchFromProgress(lastVisible, total)
+                                }
                         }
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .pointerInput(Unit) {
-                                    detectTapGestures(onTap = { toggleChrome() })
-                                },
-                            verticalArrangement = Arrangement.spacedBy(readerSettings.gap.dp),
-                        ) {
-                            itemsIndexed(pages, key = { i, p -> "${p.index}-$i" }) { _, page ->
-                                ReaderPageImage(page, zoomEnabled = false)
+                        ReaderZoomFrame(
+                            zoomEnabled = readerSettings.doubleTapZoom,
+                            resetKey = chapterId,
+                            onSingleTap = toggleChrome,
+                            modifier = Modifier.fillMaxSize(),
+                        ) { zoomModifier, scale ->
+                            LazyColumn(
+                                state = listState,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .then(zoomModifier),
+                                verticalArrangement = Arrangement.spacedBy(readerSettings.gap.dp),
+                                userScrollEnabled = scale <= 1.01f,
+                            ) {
+                                itemsIndexed(
+                                    stripItems,
+                                    key = { _, item ->
+                                        when (item) {
+                                            is ReaderStripItem.Divider -> "div-${item.chapter.id}"
+                                            is ReaderStripItem.Page ->
+                                                "p-${item.chapter.id}-${item.page.index}-${item.indexInChapter}"
+                                        }
+                                    },
+                                ) { _, item ->
+                                    when (item) {
+                                        is ReaderStripItem.Divider -> ChapterDividerBand(item.chapter.title)
+                                        is ReaderStripItem.Page -> ReaderPageImage(item.page, zoomEnabled = false)
+                                    }
+                                }
                             }
                         }
                     }
                     ReaderMode.Ltr, ReaderMode.Rtl -> {
                         val pagerState = rememberPagerState(
-                            initialPage = pageIndex.coerceIn(0, (pages.size - 1).coerceAtLeast(0)),
-                            pageCount = { pages.size },
+                            initialPage = pageIndex.coerceIn(0, (stripItems.size - 1).coerceAtLeast(0)),
+                            pageCount = { stripItems.size.coerceAtLeast(1) },
                         )
-                        LaunchedEffect(pagerState) {
-                            snapshotFlow { pagerState.currentPage }
+                        LaunchedEffect(pagerState, stripItems) {
+                            snapshotFlow { pagerState.currentPage to stripItems.size }
                                 .distinctUntilChanged()
-                                .collect { saveProgress(it) }
+                                .collect { (page, total) ->
+                                    when (val item = stripItems.getOrNull(page)) {
+                                        is ReaderStripItem.Page -> onVisiblePage(
+                                            item.chapter,
+                                            item.indexInChapter,
+                                            item.chapterPageCount,
+                                        )
+                                        is ReaderStripItem.Divider -> onVisiblePage(item.chapter, 0, 1)
+                                        null -> Unit
+                                    }
+                                    if (readerSettings.seamlessReading) {
+                                        maybePrefetchFromProgress(page, total)
+                                    }
+                                }
                         }
                         HorizontalPager(
                             state = pagerState,
@@ -281,20 +473,31 @@ fun ReaderScreen(
                                 .pointerInput(Unit) {
                                     detectTapGestures(onTap = { toggleChrome() })
                                 },
+                            userScrollEnabled = true,
                         ) { page ->
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                ReaderPageImage(
-                                    pages[page],
-                                    ContentScale.Fit,
-                                    zoomEnabled = readerSettings.doubleTapZoom,
+                            when (val item = stripItems.getOrNull(page)) {
+                                is ReaderStripItem.Page -> Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    ReaderPageImage(
+                                        item.page,
+                                        ContentScale.Fit,
+                                        zoomEnabled = readerSettings.doubleTapZoom,
+                                        fillViewport = true,
+                                    )
+                                }
+                                is ReaderStripItem.Divider -> ChapterDividerBand(
+                                    title = item.chapter.title,
+                                    fillViewport = true,
                                 )
+                                null -> Box(Modifier.fillMaxSize())
                             }
                         }
                     }
                 }
 
                 if (chromeVisible) {
-                    // Top bar — title + chapter, gradient like Flutter
                     Box(
                         modifier = Modifier
                             .align(Alignment.TopCenter)
@@ -317,7 +520,9 @@ fun ReaderScreen(
                                 Icon(Icons.AutoMirrored.Outlined.ArrowBack, null, tint = Color.White)
                             }
                             Column(
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable(onClick = { openTitle() }),
                                 horizontalAlignment = Alignment.CenterHorizontally,
                             ) {
                                 Text(
@@ -344,7 +549,6 @@ fun ReaderScreen(
                         }
                     }
 
-                    // Bottom bar — page + 5 icons like Flutter
                     Column(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
@@ -358,9 +562,9 @@ fun ReaderScreen(
                             .padding(bottom = 4.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        if (!readerSettings.hidePageNumber && pages.isNotEmpty()) {
+                        if (!readerSettings.hidePageNumber && chapterPageCount > 0) {
                             Text(
-                                text = "${pageIndex + 1} / ${pages.size}",
+                                text = "${pageIndex + 1} / $chapterPageCount",
                                 color = AppColors.textSecondary,
                                 fontSize = 13.sp,
                                 modifier = Modifier.padding(bottom = 8.dp),
@@ -374,23 +578,23 @@ fun ReaderScreen(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             IconButton(onClick = { goChapter(-1) }) {
-                                Icon(Icons.Outlined.SkipPrevious, "Пред. глава", tint = Color.White)
+                                Icon(Icons.Outlined.SkipPrevious, stringResource(R.string.cd_prev_chapter), tint = Color.White)
                             }
                             IconButton(onClick = { nav.navigate(Routes.chapters(sourceId, titleId)) }) {
-                                Icon(Icons.Outlined.FormatListNumbered, "Главы", tint = Color.White)
+                                Icon(Icons.Outlined.FormatListNumbered, stringResource(R.string.cd_chapters), tint = Color.White)
                             }
                             IconButton(onClick = { toggleBookmark() }) {
                                 Icon(
                                     if (bookmarked) Icons.Outlined.Bookmark else Icons.Outlined.BookmarkBorder,
-                                    "Закладка",
+                                    stringResource(R.string.cd_bookmark),
                                     tint = if (bookmarked) AppColors.accent else Color.White,
                                 )
                             }
                             IconButton(onClick = { settingsOpen = true }) {
-                                Icon(Icons.Outlined.Tune, "Настройки", tint = Color.White)
+                                Icon(Icons.Outlined.Tune, stringResource(R.string.cd_settings), tint = Color.White)
                             }
                             IconButton(onClick = { goChapter(1) }) {
-                                Icon(Icons.Outlined.SkipNext, "След. глава", tint = Color.White)
+                                Icon(Icons.Outlined.SkipNext, stringResource(R.string.cd_next_chapter), tint = Color.White)
                             }
                         }
                     }
@@ -411,10 +615,223 @@ fun ReaderScreen(
                 settings = readerSettings,
                 onClose = { settingsOpen = false },
                 onChange = { next ->
+                    readerSettings = next
                     scope.launch { KomaApp.instance.prefs.setReaderSettings(next) }
+                },
+                onSaveForTitle = { next ->
+                    readerSettings = next
+                    scope.launch {
+                        dao.upsertTitlePrefs(
+                            com.koma.kt.data.db.TitlePrefsEntity(
+                                sourceId = sourceId,
+                                titleId = titleId,
+                                readerMode = next.mode.prefsIndex,
+                                readerTheme = next.theme.ordinal,
+                                gap = next.gap,
+                            ),
+                        )
+                    }
                 },
             )
         }
+    }
+}
+
+private data class LoadedChapter(
+    val chapter: Chapter,
+    val pages: List<ComicPage>,
+)
+
+private sealed class ReaderStripItem {
+    data class Divider(val chapter: Chapter) : ReaderStripItem()
+    data class Page(
+        val chapter: Chapter,
+        val page: ComicPage,
+        val indexInChapter: Int,
+        val chapterPageCount: Int,
+    ) : ReaderStripItem()
+}
+
+private fun buildReaderStrip(loaded: List<LoadedChapter>): List<ReaderStripItem> {
+    val out = ArrayList<ReaderStripItem>(loaded.sumOf { it.pages.size + 1 })
+    loaded.forEachIndexed { index, lc ->
+        if (index > 0) out += ReaderStripItem.Divider(lc.chapter)
+        lc.pages.forEachIndexed { pi, page ->
+            out += ReaderStripItem.Page(lc.chapter, page, pi, lc.pages.size)
+        }
+    }
+    return out
+}
+
+@Composable
+private fun ChapterDividerBand(
+    title: String,
+    fillViewport: Boolean = false,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (fillViewport) Modifier.fillMaxSize() else Modifier)
+            .padding(vertical = if (fillViewport) 0.dp else 20.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(AppColors.surface.copy(alpha = 0.92f))
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(2.dp)
+                    .background(AppColors.accent.copy(alpha = 0.55f)),
+            )
+            Text(
+                text = stringResource(R.string.reader_chapter_separator, title),
+                color = AppColors.accent,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .padding(horizontal = 12.dp)
+                    .weight(2f, fill = false),
+            )
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(2.dp)
+                    .background(AppColors.accent.copy(alpha = 0.55f)),
+            )
+        }
+    }
+}
+
+private class ReaderZoomState {
+    var scale by mutableFloatStateOf(1f)
+    var offset by mutableStateOf(Offset.Zero)
+    var viewport by mutableStateOf(IntSize.Zero)
+
+    fun reset() {
+        scale = 1f
+        offset = Offset.Zero
+    }
+
+    fun clamp(raw: Offset, s: Float = scale): Offset {
+        if (s <= 1.01f || viewport.width == 0 || viewport.height == 0) return Offset.Zero
+        val maxX = viewport.width * (s - 1f) / 2f
+        val maxY = viewport.height * (s - 1f) / 2f
+        return Offset(raw.x.coerceIn(-maxX, maxX), raw.y.coerceIn(-maxY, maxY))
+    }
+
+    fun zoomBy(zoomChange: Float, focal: Offset) {
+        // Slight amplification so pinch feels responsive without jumping.
+        val amplified = 1f + (zoomChange - 1f) * 1.35f
+        val old = scale
+        val next = (old * amplified).coerceIn(1f, 5f)
+        if (next <= 1.01f) {
+            reset()
+            return
+        }
+        val center = Offset(viewport.width / 2f, viewport.height / 2f)
+        offset = if (old <= 1.01f) {
+            (center - focal) * (next - 1f)
+        } else {
+            val ratio = next / old
+            offset * ratio + (focal - center) * (1f - ratio)
+        }
+        scale = next
+        offset = clamp(offset, next)
+    }
+
+    fun zoomTo(target: Float, focal: Offset) {
+        val old = scale
+        val next = target.coerceIn(1f, 5f)
+        if (next <= 1.01f) {
+            reset()
+            return
+        }
+        val center = Offset(viewport.width / 2f, viewport.height / 2f)
+        offset = if (old <= 1.01f) {
+            (center - focal) * (next - 1f)
+        } else {
+            val ratio = next / old
+            offset * ratio + (focal - center) * (1f - ratio)
+        }
+        scale = next
+        offset = clamp(offset, next)
+    }
+}
+
+@Composable
+private fun ReaderZoomFrame(
+    zoomEnabled: Boolean,
+    resetKey: Any?,
+    onSingleTap: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable (zoomModifier: Modifier, scale: Float) -> Unit,
+) {
+    val state = remember { ReaderZoomState() }
+    val targetZoom = 2.5f
+
+    LaunchedEffect(resetKey) { state.reset() }
+
+    Box(
+        modifier = modifier
+            .onSizeChanged { state.viewport = it }
+            // Keys must NOT include scale — restarting mid-pinch makes zoom weak/jerky.
+            .pointerInput(zoomEnabled) {
+                detectTapGestures(
+                    onTap = { onSingleTap() },
+                    onDoubleTap = { pos ->
+                        if (!zoomEnabled) return@detectTapGestures
+                        if (state.scale > 1.1f) state.reset()
+                        else state.zoomTo(targetZoom, pos)
+                    },
+                )
+            }
+            .pointerInput(zoomEnabled) {
+                if (!zoomEnabled) return@pointerInput
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    do {
+                        val event = awaitPointerEvent()
+                        val pressed = event.changes.filter { it.pressed }
+                        when {
+                            pressed.size >= 2 -> {
+                                val zoomChange = event.calculateZoom()
+                                val centroid = event.calculateCentroid(useCurrent = true)
+                                if (kotlin.math.abs(zoomChange - 1f) > 0.001f) {
+                                    state.zoomBy(zoomChange, centroid)
+                                }
+                                event.changes.forEach { if (it.positionChanged()) it.consume() }
+                            }
+                            pressed.size == 1 && state.scale > 1.01f -> {
+                                val change = pressed[0]
+                                val pan = change.positionChange()
+                                if (pan != Offset.Zero) {
+                                    state.offset = state.clamp(state.offset + pan)
+                                    change.consume()
+                                }
+                            }
+                        }
+                    } while (event.changes.any { it.pressed })
+                }
+            },
+    ) {
+        content(
+            Modifier.graphicsLayer {
+                scaleX = state.scale
+                scaleY = state.scale
+                translationX = state.offset.x
+                translationY = state.offset.y
+                transformOrigin = TransformOrigin.Center
+            },
+            state.scale,
+        )
     }
 }
 
@@ -423,37 +840,98 @@ private fun ReaderPageImage(
     page: ComicPage,
     contentScale: ContentScale = ContentScale.FillWidth,
     zoomEnabled: Boolean = false,
+    fillViewport: Boolean = false,
 ) {
-    val model: Any = remember(page.imageUrl) {
-        val path = page.imageUrl
-        if (path.startsWith("http")) path else File(path)
+    val context = LocalContext.current
+    val model = remember(page.imageUrl) {
+        ImageRequest.Builder(context)
+            .data(if (page.imageUrl.startsWith("http")) page.imageUrl else File(page.imageUrl))
+            .crossfade(false)
+            .memoryCachePolicy(CachePolicy.ENABLED)
+            .diskCachePolicy(CachePolicy.ENABLED)
+            .build()
     }
-    var scale by remember { mutableFloatStateOf(1f) }
-    AsyncImage(
-        model = model,
-        contentDescription = null,
+    val state = remember(page.imageUrl) { ReaderZoomState() }
+    val targetZoom = 2.5f
+    var imageReady by remember(page.imageUrl) { mutableStateOf(false) }
+
+    Box(
         modifier = Modifier
-            .fillMaxWidth()
+            .then(if (fillViewport) Modifier.fillMaxSize() else Modifier.fillMaxWidth())
+            // Reserve height so LazyColumn doesn't jump when the bitmap arrives mid-fling.
             .then(
-                if (zoomEnabled) {
-                    Modifier
-                        .pointerInput(Unit) {
-                            detectTapGestures(
-                                onDoubleTap = {
-                                    scale = if (scale > 1.1f) 1f else 2.5f
-                                },
-                            )
-                        }
-                        .graphicsLayer {
-                            scaleX = scale
-                            scaleY = scale
-                        }
+                if (!fillViewport && !imageReady) {
+                    Modifier.heightIn(min = 420.dp)
                 } else {
                     Modifier
                 },
-            ),
-        contentScale = contentScale,
-    )
+            )
+            .background(Color.Black.copy(alpha = 0.12f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        AsyncImage(
+            model = model,
+            contentDescription = null,
+            onSuccess = { imageReady = true },
+            onError = { imageReady = true },
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (fillViewport) Modifier.fillMaxSize() else Modifier)
+                .onSizeChanged { state.viewport = it }
+                .graphicsLayer {
+                    scaleX = state.scale
+                    scaleY = state.scale
+                    translationX = state.offset.x
+                    translationY = state.offset.y
+                    transformOrigin = TransformOrigin.Center
+                }
+                .then(
+                    if (zoomEnabled) {
+                        Modifier
+                            .pointerInput(page.imageUrl) {
+                                detectTapGestures(
+                                    onDoubleTap = { pos ->
+                                        if (state.scale > 1.1f) state.reset()
+                                        else state.zoomTo(targetZoom, pos)
+                                    },
+                                )
+                            }
+                            .pointerInput(page.imageUrl) {
+                                awaitEachGesture {
+                                    awaitFirstDown(requireUnconsumed = false)
+                                    do {
+                                        val event = awaitPointerEvent()
+                                        val pressed = event.changes.filter { it.pressed }
+                                        when {
+                                            pressed.size >= 2 -> {
+                                                val zoomChange = event.calculateZoom()
+                                                val centroid = event.calculateCentroid(useCurrent = true)
+                                                if (kotlin.math.abs(zoomChange - 1f) > 0.001f) {
+                                                    state.zoomBy(zoomChange, centroid)
+                                                }
+                                                event.changes.forEach {
+                                                    if (it.positionChanged()) it.consume()
+                                                }
+                                            }
+                                            pressed.size == 1 && state.scale > 1.01f -> {
+                                                val change = pressed[0]
+                                                val pan = change.positionChange()
+                                                if (pan != Offset.Zero) {
+                                                    state.offset = state.clamp(state.offset + pan)
+                                                    change.consume()
+                                                }
+                                            }
+                                        }
+                                    } while (event.changes.any { it.pressed })
+                                }
+                            }
+                    } else {
+                        Modifier
+                    },
+                ),
+            contentScale = contentScale,
+        )
+    }
 }
 
 @Composable
@@ -461,6 +939,7 @@ private fun ReaderSettingsSheet(
     settings: ReaderSettings,
     onClose: () -> Unit,
     onChange: (ReaderSettings) -> Unit,
+    onSaveForTitle: (ReaderSettings) -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -469,7 +948,7 @@ private fun ReaderSettingsSheet(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = "Настройки",
+                text = stringResource(R.string.settings_title),
                 color = AppColors.textPrimary,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
@@ -480,7 +959,7 @@ private fun ReaderSettingsSheet(
             }
         }
         Spacer(Modifier.height(8.dp))
-        Text("Режим читалки", color = AppColors.textSecondary, fontSize = 13.sp)
+        Text(stringResource(R.string.reader_mode), color = AppColors.textSecondary, fontSize = 13.sp)
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             ModeCard(
@@ -506,23 +985,23 @@ private fun ReaderSettingsSheet(
             )
         }
         Spacer(Modifier.height(18.dp))
-        Text("Тема читалки", color = AppColors.textSecondary, fontSize = 13.sp)
+        Text(stringResource(R.string.reader_theme), color = AppColors.textSecondary, fontSize = 13.sp)
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ThemeChoice(
-                label = ReaderTheme.Light.label,
+                label = stringResource(ReaderTheme.Light.labelRes),
                 selected = settings.theme == ReaderTheme.Light,
                 onClick = { onChange(settings.copy(theme = ReaderTheme.Light)) },
                 modifier = Modifier.weight(1f),
             )
             ThemeChoice(
-                label = ReaderTheme.Dark.label,
+                label = stringResource(ReaderTheme.Dark.labelRes),
                 selected = settings.theme == ReaderTheme.Dark,
                 onClick = { onChange(settings.copy(theme = ReaderTheme.Dark)) },
                 modifier = Modifier.weight(1f),
             )
             ThemeChoice(
-                label = ReaderTheme.System.label,
+                label = stringResource(ReaderTheme.System.labelRes),
                 selected = settings.theme == ReaderTheme.System,
                 onClick = { onChange(settings.copy(theme = ReaderTheme.System)) },
                 modifier = Modifier.weight(1f),
@@ -530,7 +1009,7 @@ private fun ReaderSettingsSheet(
         }
         Spacer(Modifier.height(18.dp))
         Text(
-            "Отступ между изображениями ${settings.gap.toInt()}px",
+            stringResource(R.string.reader_gap, settings.gap.toInt()),
             color = AppColors.textSecondary,
             fontSize = 13.sp,
         )
@@ -545,14 +1024,30 @@ private fun ReaderSettingsSheet(
             ),
         )
         SettingSwitchRow(
-            label = "Увеличение двойным нажатием",
+            label = stringResource(R.string.reader_double_tap_zoom),
             checked = settings.doubleTapZoom,
             onCheckedChange = { onChange(settings.copy(doubleTapZoom = it)) },
         )
         SettingSwitchRow(
-            label = "Скрыть номер страниц",
+            label = stringResource(R.string.reader_hide_page_number),
             checked = settings.hidePageNumber,
             onCheckedChange = { onChange(settings.copy(hidePageNumber = it)) },
+        )
+        SettingSwitchRow(
+            label = stringResource(R.string.reader_seamless),
+            checked = settings.seamlessReading,
+            onCheckedChange = { onChange(settings.copy(seamlessReading = it)) },
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = stringResource(R.string.reader_save_for_title),
+            color = AppColors.accent,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onSaveForTitle(settings) }
+                .padding(vertical = 12.dp),
         )
     }
 }

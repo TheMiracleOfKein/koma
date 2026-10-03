@@ -3,6 +3,7 @@ package com.koma.kt.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Text
@@ -17,6 +18,8 @@ import com.koma.kt.KomaApp
 import com.koma.kt.ui.components.TitleListRow
 import com.koma.kt.ui.nav.Routes
 import com.koma.kt.ui.theme.AppColors
+import androidx.compose.ui.res.stringResource
+import com.koma.kt.R
 
 @Composable
 fun HistoryScreen(nav: NavHostController) {
@@ -25,12 +28,13 @@ fun HistoryScreen(nav: NavHostController) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(AppColors.background),
+            .background(AppColors.background)
+            .statusBarsPadding(),
         contentAlignment = Alignment.Center,
     ) {
         if (history.isEmpty()) {
             Text(
-                text = "История пуста",
+                text = stringResource(R.string.history_empty),
                 color = AppColors.textSecondary,
                 fontSize = 15.sp,
             )

@@ -18,16 +18,16 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.koma.kt.KomaApp
+import com.koma.kt.R
 import com.koma.kt.ui.theme.AppColors
 import java.net.URI
 
@@ -39,8 +39,11 @@ fun CloudflareChallengeOverlay(
     onSolved: () -> Unit,
 ) {
     val http = KomaApp.instance.http
-    var hint by remember {
-        mutableStateOf("Дождитесь сайта источника (не страницы Cloudflare), затем нажмите «Продолжить».")
+    val siteReady = remember { mutableStateOf(value = false) }
+    val hint = if (siteReady.value) {
+        stringResource(R.string.cf_ready_hint)
+    } else {
+        stringResource(R.string.cf_wait_hint)
     }
     val origin = "${uri.scheme}://${uri.host}/"
 
@@ -50,7 +53,7 @@ fun CloudflareChallengeOverlay(
             .background(AppColors.background),
     ) {
         Text(
-            text = "Проверка Cloudflare",
+            text = stringResource(R.string.cf_title),
             color = AppColors.textPrimary,
             fontSize = 20.sp,
             modifier = Modifier.padding(16.dp),
@@ -84,7 +87,7 @@ fun CloudflareChallengeOverlay(
                                 title.contains("attention required") ||
                                 title.contains("cloudflare")
                             if (!isChallenge) {
-                                hint = "Сайт загружен. Можно продолжить."
+                                siteReady.value = true
                             }
                         }
                     }
@@ -100,7 +103,7 @@ fun CloudflareChallengeOverlay(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             TextButton(onClick = onDismiss) {
-                Text("Отмена", color = AppColors.textSecondary)
+                Text(stringResource(R.string.action_cancel), color = AppColors.textSecondary)
             }
             Button(
                 onClick = {
@@ -111,7 +114,7 @@ fun CloudflareChallengeOverlay(
                     containerColor = AppColors.accent,
                     contentColor = Color.Black,
                 ),
-            ) { Text("Продолжить") }
+            ) { Text(stringResource(R.string.action_continue)) }
         }
     }
 }

@@ -4,10 +4,8 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- Fallback K mark if bitmap foreground is unavailable -->
     <path
-        android:fillColor="#F2F2F2"
-        android:pathData="M30,28h18c10,0 18,8 18,18v0c0,10 -8,18 -18,18h-8v16h-10zM40,38v16h8c4.4,0 8,-3.6 8,-8v0c0,-4.4 -3.6,-8 -8,-8z" />
-    <path
-        android:fillColor="#F2F2F2"
-        android:pathData="M70,28h10v52h-10z" />
+        android:fillColor="#F5A524"
+        android:pathData="M34,28h12v20l18,-20h14L56,52l24,28H66L48,58v22H34z" />
 </vector>

@@ -1,45 +1,46 @@
 package com.koma.kt.ui.theme
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
-import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
 private val DarkScheme = darkColorScheme(
-    primary = AppColors.accent,
+    primary = DarkKomaColors.accent,
     onPrimary = Color.Black,
-    secondary = AppColors.accent,
-    background = AppColors.background,
-    surface = AppColors.surface,
-    onBackground = AppColors.textPrimary,
-    onSurface = AppColors.textPrimary,
-    error = AppColors.danger,
-    outline = AppColors.divider,
+    secondary = DarkKomaColors.accent,
+    background = DarkKomaColors.background,
+    surface = DarkKomaColors.surface,
+    onBackground = DarkKomaColors.textPrimary,
+    onSurface = DarkKomaColors.textPrimary,
+    error = DarkKomaColors.danger,
+    outline = DarkKomaColors.divider,
 )
 
 private val LightScheme = lightColorScheme(
-    primary = AppColors.accent,
+    primary = LightKomaColors.accent,
     onPrimary = Color.Black,
-    secondary = AppColors.accentMuted,
-    background = AppColors.lightBackground,
-    surface = AppColors.lightSurface,
-    surfaceVariant = AppColors.lightCard,
-    onBackground = AppColors.lightText,
-    onSurface = AppColors.lightText,
-    onSurfaceVariant = AppColors.lightMuted,
-    error = AppColors.danger,
-    outline = AppColors.lightDivider,
+    secondary = LightKomaColors.accentMuted,
+    background = LightKomaColors.background,
+    surface = LightKomaColors.surface,
+    surfaceVariant = LightKomaColors.card,
+    onBackground = LightKomaColors.textPrimary,
+    onSurface = LightKomaColors.textPrimary,
+    onSurfaceVariant = LightKomaColors.textSecondary,
+    error = LightKomaColors.danger,
+    outline = LightKomaColors.divider,
 )
 
 private val KomaTypography = Typography(
     bodyLarge = TextStyle(fontSize = 16.sp),
     bodyMedium = TextStyle(fontSize = 14.sp),
-    bodySmall = TextStyle(fontSize = 12.sp, color = AppColors.textSecondary),
+    bodySmall = TextStyle(fontSize = 12.sp),
     titleLarge = TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Bold),
     titleMedium = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.SemiBold),
 )
@@ -49,9 +50,12 @@ fun KomaTheme(
     darkTheme: Boolean = true,
     content: @Composable () -> Unit,
 ) {
-    MaterialTheme(
-        colorScheme = if (darkTheme) DarkScheme else LightScheme,
-        typography = KomaTypography,
-        content = content,
-    )
+    val colors = if (darkTheme) DarkKomaColors else LightKomaColors
+    CompositionLocalProvider(LocalKomaColors provides colors) {
+        MaterialTheme(
+            colorScheme = if (darkTheme) DarkScheme else LightScheme,
+            typography = KomaTypography,
+            content = content,
+        )
+    }
 }

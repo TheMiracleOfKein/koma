@@ -13,6 +13,7 @@ import com.koma.kt.domain.TitleSummary
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.net.URI
+import com.koma.kt.util.urlEncode
 
 class MadaraParser {
     fun parseTitleList(html: String, page: Int, baseUrl: String?): PagedResult<TitleSummary> {
@@ -261,23 +262,53 @@ class MadaraEngine(
         )
         val html = response.body
         if (html.trim().isEmpty() || html.trim() == "0") {
-            throw SourceFetchException("Пустой ответ Madara AJAX")
+            throw SourceFetchException(com.koma.kt.data.locale.appString(com.koma.kt.R.string.error_madara_ajax_empty))
         }
         return parser.parseTitleList(html, page, manifest.baseUrl)
     }
 
-    override suspend fun search(query: String, page: Int): PagedResult<TitleSummary> {
+    override suspend fun search(
+        query: String,
+        page: Int,
+        filters: com.koma.kt.domain.FilterList,
+    ): PagedResult<TitleSummary> {
+        val sort = (filters.filters.filterIsInstance<com.koma.kt.domain.SourceFilter.Select>()
+            .firstOrNull { it.id == "orderby" }?.selectedValue) ?: "latest"
         val path = if (page > 1) "/page/$page/" else "/"
+        val order = when (sort) {
+            "views", "popular" -> "views"
+            "trending" -> "trending"
+            "new" -> "new-manga"
+            else -> "latest"
+        }
+        // Madara search still uses s=; order applied when query empty via browse fallback
+        if (query.isBlank()) {
+            return browse(
+                page = page,
+                orderBy = if (order == "views") "views" else "latest",
+                ajaxMetaKey = if (order == "views") "_wp_manga_views" else "_latest_update",
+            )
+        }
         val uri = URI(
             manifest.baseUri.scheme,
             manifest.baseUri.authority,
             path,
-            "s=${java.net.URLEncoder.encode(query, "UTF-8")}&post_type=wp-manga",
+            "s=${urlEncode(query)}&post_type=wp-manga",
             null,
         )
         val response = http.get(uri, source = manifest)
         return parser.parseTitleList(response.body, page, manifest.baseUrl)
     }
+
+    override fun getFilters(): com.koma.kt.domain.FilterList = com.koma.kt.domain.FilterList(
+        listOf(
+            com.koma.kt.domain.SourceFilter.Select(
+                id = "orderby",
+                name = com.koma.kt.data.locale.appString(com.koma.kt.R.string.filter_sort),
+                options = listOf("latest", "views", "trending", "new"),
+            ),
+        ),
+    )
 
     override suspend fun getTitle(id: String): TitleDetails {
         val response = http.get(abs(id), source = manifest)
@@ -305,7 +336,7 @@ class MadaraEngine(
         if (!url.contains("style=")) url = "$url$chapterSuffix"
         val response = http.get(abs(url), source = manifest)
         val pages = parser.parsePages(response.body, manifest.baseUrl)
-        if (pages.isEmpty()) throw SourceFetchException("Не удалось получить страницы главы")
+        if (pages.isEmpty()) throw SourceFetchException(com.koma.kt.data.locale.appString(com.koma.kt.R.string.error_pages_failed))
         return pages
     }
 

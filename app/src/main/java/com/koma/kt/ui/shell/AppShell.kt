@@ -7,12 +7,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Bookmark
 import androidx.compose.material.icons.outlined.History
@@ -31,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -42,6 +47,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.koma.kt.KomaApp
+import com.koma.kt.R
 import com.koma.kt.ui.components.CloudflareChallengeOverlay
 import com.koma.kt.ui.components.KomaLogo
 import com.koma.kt.ui.nav.Routes
@@ -98,6 +104,9 @@ fun AppShell(nav: NavHostController) {
     Box(modifier = Modifier.fillMaxSize().background(AppColors.background)) {
         Scaffold(
             containerColor = AppColors.background,
+            // Only consume bottom insets for the nav bar; screens with TopAppBar
+            // handle status bars themselves (avoids double top gap on Title etc.).
+            contentWindowInsets = WindowInsets.navigationBars.only(WindowInsetsSides.Bottom),
             bottomBar = {
                 if (showBottomBar) {
                     BottomNavBar(
@@ -222,14 +231,14 @@ private fun BottomNavBar(
         ) {
             NavSlot(
                 selected = currentRoute == Routes.Library,
-                label = "Закладки",
+                label = stringResource(R.string.nav_library),
                 icon = Icons.Outlined.Bookmark,
                 modifier = Modifier.weight(1f),
                 onClick = { onSelect(Routes.Library) },
             )
             NavSlot(
                 selected = currentRoute == Routes.Catalog,
-                label = "Каталог",
+                label = stringResource(R.string.nav_catalog),
                 icon = Icons.Outlined.GridView,
                 modifier = Modifier.weight(1f),
                 onClick = { onSelect(Routes.Catalog) },
@@ -245,14 +254,14 @@ private fun BottomNavBar(
             }
             NavSlot(
                 selected = currentRoute == Routes.History,
-                label = "История",
+                label = stringResource(R.string.nav_history),
                 icon = Icons.Outlined.History,
                 modifier = Modifier.weight(1f),
                 onClick = { onSelect(Routes.History) },
             )
             NavSlot(
                 selected = false,
-                label = "Меню",
+                label = stringResource(R.string.nav_menu),
                 icon = Icons.Outlined.Menu,
                 modifier = Modifier.weight(1f),
                 onClick = { onSelect(null) },

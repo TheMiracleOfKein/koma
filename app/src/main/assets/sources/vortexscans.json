@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "vortexscans",
+  "name": "Vortex Scans",
+  "version": "1.0.0",
+  "mediaKind": "comics",
+  "language": "en",
+  "engine": "hivetoons",
+  "baseUrl": "https://vortexscans.org",
+  "headers": {
+    "Referer": "https://vortexscans.org/"
+  },
+  "engineConfig": {
+    "apiBase": "https://api.vortexscans.org"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "remanga",
+  "name": "ReManga",
+  "version": "1.0.0",
+  "mediaKind": "comics",
+  "language": "ru",
+  "engine": "remanga",
+  "baseUrl": "https://remanga.org",
+  "headers": {
+    "Referer": "https://remanga.org/"
+  },
+  "engineConfig": {
+    "apiBase": "https://api.remanga.org/api"
+  }
+}

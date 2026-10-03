@@ -14,16 +14,21 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.DownloadDone
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.SwapVert
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -37,10 +42,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import com.koma.kt.KomaApp
+import com.koma.kt.R
+import com.koma.kt.data.db.DownloadQueueEntity
 import com.koma.kt.domain.Chapter
 import com.koma.kt.domain.CloudflareException
 import com.koma.kt.domain.TitleDetails
@@ -53,6 +62,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChaptersScreen(nav: NavHostController, sourceId: String, titleId: String) {
+    val resources = LocalResources.current
     var chapters by remember { mutableStateOf<List<Chapter>>(emptyList()) }
     var details by remember { mutableStateOf<TitleDetails?>(null) }
     var loading by remember { mutableStateOf(true) }
@@ -63,18 +73,32 @@ fun ChaptersScreen(nav: NavHostController, sourceId: String, titleId: String) {
     var downloadedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var currentChapterId by remember { mutableStateOf<String?>(null) }
     var refreshEpoch by remember { mutableIntStateOf(0) }
+    var selectMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     val scope = rememberCoroutineScope()
     val networkEpoch by KomaApp.instance.http.networkEpoch.collectAsState()
-    val downloadProgress by KomaApp.instance.downloads.progress.collectAsState()
+    val queueItems by KomaApp.instance.downloadQueue.items.collectAsState()
+    val online by KomaApp.instance.network.online.collectAsState()
 
-    LaunchedEffect(sourceId, titleId, networkEpoch, refreshEpoch) {
+    LaunchedEffect(sourceId, titleId, networkEpoch, refreshEpoch, online) {
         loading = true
         error = null
         cloudflareUri = null
         runCatching {
-            val source = KomaApp.instance.sources.sourceById(sourceId) ?: error("Нет источника")
-            details = source.getTitle(titleId)
-            val list = source.getChapters(titleId)
+            val offline = KomaApp.instance.offlineCache
+            val cached = offline.get(sourceId, titleId)
+            val source = KomaApp.instance.sources.sourceById(sourceId)
+            val d = cached?.details
+                ?: source?.let { runCatching { it.getTitle(titleId) }.getOrNull() }
+                ?: offline.detailsFromDownloads(sourceId, titleId)
+                ?: error(resources.getString(R.string.error_no_title_data))
+            details = d
+            val list = cached?.chapters
+                ?: source?.let { runCatching { it.getChapters(titleId) }.getOrNull() }
+                ?: offline.chaptersFromDownloads(sourceId, titleId)
+            if (source != null && list.isNotEmpty()) {
+                offline.save(sourceId, titleId, d, list)
+            }
             readIds = KomaApp.instance.dao.readChapterIds(sourceId, titleId).toSet()
             downloadedIds = KomaApp.instance.downloads.downloadedChapterIds(sourceId, titleId)
             currentChapterId = KomaApp.instance.dao.getProgress(sourceId, titleId)?.chapterId
@@ -87,34 +111,116 @@ fun ChaptersScreen(nav: NavHostController, sourceId: String, titleId: String) {
             if (e is CloudflareException) {
                 cloudflareUri = e.uri
                 scope.launch { KomaApp.instance.http.requestChallenge(e.uri) }
-                error = "Нужна проверка Cloudflare"
+                error = resources.getString(R.string.error_cloudflare_needed)
             } else {
                 error = e.message ?: e.toString()
             }
         }
     }
 
+    LaunchedEffect(queueItems, sourceId, titleId) {
+        downloadedIds = KomaApp.instance.downloads.downloadedChapterIds(sourceId, titleId)
+    }
+
     val displayed = remember(chapters, ascending) {
         if (ascending) chapters else chapters.asReversed()
+    }
+    val queueByChapter = remember(queueItems, sourceId, titleId) {
+        queueItems
+            .filter { it.sourceId == sourceId && it.titleId == titleId }
+            .associateBy { it.chapterId }
     }
 
     Scaffold(
         containerColor = AppColors.background,
         topBar = {
             TopAppBar(
-                title = { Text("Главы", color = AppColors.textPrimary) },
+                title = {
+                    Text(
+                        if (selectMode) {
+                            stringResource(R.string.chapters_selected, selectedIds.size)
+                        } else {
+                            stringResource(R.string.chapters_title)
+                        },
+                        color = AppColors.textPrimary,
+                    )
+                },
                 navigationIcon = {
-                    IconButton(onClick = { nav.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, null, tint = AppColors.textPrimary)
+                    IconButton(onClick = {
+                        if (selectMode) {
+                            selectMode = false
+                            selectedIds = emptySet()
+                        } else {
+                            nav.popBackStack()
+                        }
+                    }) {
+                        Icon(
+                            if (selectMode) Icons.Outlined.Close else Icons.AutoMirrored.Outlined.ArrowBack,
+                            null,
+                            tint = AppColors.textPrimary,
+                        )
                     }
                 },
                 actions = {
-                    IconButton(onClick = { ascending = !ascending }) {
-                        Icon(Icons.Outlined.SwapVert, contentDescription = "Сортировка", tint = AppColors.textPrimary)
+                    if (selectMode) {
+                        IconButton(
+                            onClick = {
+                                selectedIds = displayed
+                                    .filter { it.id !in downloadedIds }
+                                    .map { it.id }
+                                    .toSet()
+                            },
+                        ) {
+                            Icon(Icons.Outlined.SelectAll, stringResource(R.string.cd_select_all), tint = AppColors.textPrimary)
+                        }
+                        TextButton(
+                            onClick = {
+                                val chosen = displayed.filter { it.id in selectedIds }
+                                KomaApp.instance.downloadQueue.enqueueAll(
+                                    sourceId = sourceId,
+                                    titleId = titleId,
+                                    chapters = chosen,
+                                    titleName = details?.title ?: titleId,
+                                    coverUrl = details?.coverUrl,
+                                )
+                                selectMode = false
+                                selectedIds = emptySet()
+                            },
+                        ) {
+                            Text(stringResource(R.string.action_download), color = AppColors.accent)
+                        }
+                    } else {
+                        IconButton(onClick = { selectMode = true }) {
+                            Icon(Icons.Outlined.Download, stringResource(R.string.cd_selection), tint = AppColors.textPrimary)
+                        }
+                        IconButton(onClick = { ascending = !ascending }) {
+                            Icon(Icons.Outlined.SwapVert, contentDescription = stringResource(R.string.cd_sort), tint = AppColors.textPrimary)
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = AppColors.background),
             )
+        },
+        floatingActionButton = {
+            if (selectMode && selectedIds.isNotEmpty()) {
+                FloatingActionButton(
+                    onClick = {
+                        val chosen = displayed.filter { it.id in selectedIds }
+                        KomaApp.instance.downloadQueue.enqueueAll(
+                            sourceId = sourceId,
+                            titleId = titleId,
+                            chapters = chosen,
+                            titleName = details?.title ?: titleId,
+                            coverUrl = details?.coverUrl,
+                        )
+                        selectMode = false
+                        selectedIds = emptySet()
+                    },
+                    containerColor = AppColors.accent,
+                ) {
+                    Icon(Icons.Outlined.Download, null, tint = androidx.compose.ui.graphics.Color.Black)
+                }
+            }
         },
     ) { padding ->
         when {
@@ -134,20 +240,43 @@ fun ChaptersScreen(nav: NavHostController, sourceId: String, titleId: String) {
                     .background(AppColors.background),
             ) {
                 items(displayed, key = { it.id }) { chapter ->
-                    val key = KomaApp.instance.downloads.keyOf(sourceId, titleId, chapter.id)
-                    val progress = downloadProgress[key]
+                    val queueItem = queueByChapter[chapter.id]
                     val isDownloaded = chapter.id in downloadedIds
                     val isRead = chapter.id in readIds
                     val isCurrent = chapter.id == currentChapterId
+                    val selected = chapter.id in selectedIds
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
-                                nav.navigate(Routes.reader(sourceId, titleId, chapter.id))
+                                if (selectMode) {
+                                    if (isDownloaded) return@clickable
+                                    selectedIds = if (selected) {
+                                        selectedIds - chapter.id
+                                    } else {
+                                        selectedIds + chapter.id
+                                    }
+                                } else {
+                                    nav.navigate(Routes.reader(sourceId, titleId, chapter.id))
+                                }
                             }
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        if (selectMode) {
+                            Checkbox(
+                                checked = selected,
+                                onCheckedChange = {
+                                    if (isDownloaded) return@Checkbox
+                                    selectedIds = if (selected) {
+                                        selectedIds - chapter.id
+                                    } else {
+                                        selectedIds + chapter.id
+                                    }
+                                },
+                                enabled = !isDownloaded,
+                            )
+                        }
                         Column(modifier = Modifier.weight(1f)) {
                             Text(chapter.title, color = AppColors.textPrimary, fontSize = 14.sp)
                             chapter.dateLabel?.let {
@@ -157,59 +286,73 @@ fun ChaptersScreen(nav: NavHostController, sourceId: String, titleId: String) {
                         when {
                             isCurrent -> Icon(
                                 Icons.Outlined.PlayArrow,
-                                contentDescription = "Текущая",
+                                contentDescription = stringResource(R.string.cd_current),
                                 tint = AppColors.accent,
                                 modifier = Modifier.size(20.dp).padding(end = 4.dp),
                             )
                             isRead -> Icon(
                                 Icons.Outlined.CheckCircle,
-                                contentDescription = "Прочитано",
+                                contentDescription = stringResource(R.string.cd_read),
                                 tint = AppColors.textSecondary,
                                 modifier = Modifier.size(18.dp).padding(end = 4.dp),
                             )
                         }
-                        when {
-                            progress != null -> Box(
-                                modifier = Modifier.size(40.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                CircularProgressIndicator(
-                                    progress = { progress },
-                                    color = AppColors.accent,
-                                    strokeWidth = 2.dp,
-                                    modifier = Modifier.size(22.dp),
-                                )
-                            }
-                            isDownloaded -> Icon(
-                                Icons.Outlined.DownloadDone,
-                                contentDescription = "Скачано",
-                                tint = AppColors.accent,
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .padding(8.dp),
-                            )
-                            else -> IconButton(
-                                onClick = {
-                                    scope.launch {
-                                        runCatching {
-                                            val source = KomaApp.instance.sources.sourceById(sourceId)
-                                                ?: return@launch
-                                            KomaApp.instance.downloads.downloadChapter(
-                                                source = source,
-                                                titleId = titleId,
-                                                title = details,
-                                                chapter = chapter,
+                        if (!selectMode) {
+                            when {
+                                queueItem != null &&
+                                    (queueItem.status == DownloadQueueEntity.STATUS_PENDING ||
+                                        queueItem.status == DownloadQueueEntity.STATUS_RUNNING) -> {
+                                    IconButton(
+                                        onClick = {
+                                            KomaApp.instance.downloadQueue.cancel(
+                                                sourceId,
+                                                titleId,
+                                                chapter.id,
                                             )
-                                            downloadedIds = downloadedIds + chapter.id
-                                        }.onFailure { e ->
-                                            if (e is CloudflareException) {
-                                                KomaApp.instance.http.requestChallenge(e.uri)
+                                        },
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.size(40.dp),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            if (queueItem.status == DownloadQueueEntity.STATUS_RUNNING) {
+                                                CircularProgressIndicator(
+                                                    progress = { queueItem.progress },
+                                                    color = AppColors.accent,
+                                                    strokeWidth = 2.dp,
+                                                    modifier = Modifier.size(22.dp),
+                                                )
                                             }
+                                            Icon(
+                                                Icons.Outlined.Close,
+                                                contentDescription = stringResource(R.string.cd_cancel),
+                                                tint = AppColors.danger,
+                                                modifier = Modifier.size(14.dp),
+                                            )
                                         }
                                     }
-                                },
-                            ) {
-                                Icon(Icons.Outlined.Download, null, tint = AppColors.textSecondary)
+                                }
+                                isDownloaded -> Icon(
+                                    Icons.Outlined.DownloadDone,
+                                    contentDescription = stringResource(R.string.cd_downloaded),
+                                    tint = AppColors.accent,
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .padding(8.dp),
+                                )
+                                else -> IconButton(
+                                    onClick = {
+                                        KomaApp.instance.downloadQueue.enqueue(
+                                            sourceId = sourceId,
+                                            titleId = titleId,
+                                            chapter = chapter,
+                                            titleName = details?.title ?: titleId,
+                                            coverUrl = details?.coverUrl,
+                                        )
+                                    },
+                                ) {
+                                    Icon(Icons.Outlined.Download, null, tint = AppColors.textSecondary)
+                                }
                             }
                         }
                     }

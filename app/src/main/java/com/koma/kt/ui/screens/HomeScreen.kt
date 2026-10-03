@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -54,10 +55,14 @@ import com.koma.kt.ui.components.TitleListRow
 import com.koma.kt.ui.nav.Routes
 import com.koma.kt.ui.theme.AppColors
 import kotlinx.coroutines.launch
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.stringResource
+import com.koma.kt.R
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(nav: NavHostController) {
+    val resources = LocalResources.current
     var feed by remember { mutableStateOf<HomeFeed?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var cloudflareUri by remember { mutableStateOf<java.net.URI?>(null) }
@@ -66,15 +71,32 @@ fun HomeScreen(nav: NavHostController) {
     var refreshEpoch by remember { mutableIntStateOf(0) }
     val history by KomaApp.instance.dao.observeHistory().collectAsState(initial = emptyList())
     val networkEpoch by KomaApp.instance.http.networkEpoch.collectAsState()
+    val online by KomaApp.instance.network.online.collectAsState()
+    val downloads by KomaApp.instance.dao.observeDownloads().collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
+    val offlineTitles = remember(downloads) {
+        downloads
+            .groupBy { it.sourceId to it.titleId }
+            .map { (key, items) ->
+                val first = items.first()
+                Triple(key.first, key.second, first)
+            }
+            .sortedBy { it.third.titleName.lowercase() }
+    }
 
-    LaunchedEffect(networkEpoch, refreshEpoch) {
+    LaunchedEffect(networkEpoch, refreshEpoch, online) {
+        if (!online) {
+            loading = false
+            error = null
+            feed = null
+            return@LaunchedEffect
+        }
         loading = true
         error = null
         cloudflareUri = null
         runCatching {
             val source = KomaApp.instance.sources.activeSource()
-                ?: error("Нет активных источников")
+                ?: error(resources.getString(R.string.error_no_active_sources))
             sourceId = source.manifest.id
             source.getHome()
         }.onSuccess {
@@ -85,7 +107,7 @@ fun HomeScreen(nav: NavHostController) {
             if (e is CloudflareException) {
                 cloudflareUri = e.uri
                 scope.launch { KomaApp.instance.http.requestChallenge(e.uri) }
-                error = "Нужна проверка Cloudflare"
+                error = resources.getString(R.string.error_cloudflare_needed)
             } else {
                 error = e.message ?: e.toString()
             }
@@ -95,7 +117,8 @@ fun HomeScreen(nav: NavHostController) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(AppColors.background),
+            .background(AppColors.background)
+            .statusBarsPadding(),
     ) {
         QuickSearchBar(
             value = "",
@@ -106,6 +129,30 @@ fun HomeScreen(nav: NavHostController) {
         )
 
         when {
+            !online -> {
+                Text(
+                    stringResource(R.string.home_offline_downloaded),
+                    color = AppColors.textSecondary,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+                if (offlineTitles.isEmpty()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(stringResource(R.string.home_no_downloaded), color = AppColors.textSecondary, fontSize = 15.sp)
+                    }
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        items(offlineTitles, key = { "${it.first}:${it.second}" }) { (sid, tid, item) ->
+                            TitleListRow(
+                                title = item.titleName,
+                                coverUrl = item.coverUrl,
+                                subtitle = stringResource(R.string.chapters_count_short, downloads.count { it.sourceId == sid && it.titleId == tid }),
+                                onClick = { nav.navigate(Routes.title(sid, tid)) },
+                            )
+                        }
+                    }
+                }
+            }
             loading && feed == null -> LoadingBox()
             error != null && feed == null -> ErrorRetryBox(
                 message = error!!,
@@ -183,7 +230,7 @@ fun HomeScreen(nav: NavHostController) {
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Text(
-                                    text = "Продолжить читать",
+                                    text = stringResource(R.string.home_continue_reading),
                                     color = AppColors.textPrimary,
                                     fontSize = 16.sp,
                                     fontWeight = FontWeight.SemiBold,
@@ -194,7 +241,7 @@ fun HomeScreen(nav: NavHostController) {
                                         scope.launch { KomaApp.instance.dao.clearAllProgress() }
                                     },
                                 ) {
-                                    Text("ОЧИСТИТЬ", color = AppColors.accent, fontSize = 12.sp)
+                                    Text(stringResource(R.string.action_clear), color = AppColors.accent, fontSize = 12.sp)
                                 }
                             }
                         }
@@ -216,11 +263,11 @@ fun HomeScreen(nav: NavHostController) {
 
                     item {
                         SectionHeader(
-                            title = "Сейчас читают",
+                            title = stringResource(R.string.home_now_reading),
                             onTap = { nav.navigate(Routes.Catalog) },
                         )
                         Text(
-                            text = "Новинки",
+                            text = stringResource(R.string.home_new_releases),
                             color = AppColors.textSecondary,
                             fontSize = 13.sp,
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -233,6 +280,7 @@ fun HomeScreen(nav: NavHostController) {
                             coverUrl = item.coverUrl,
                             subtitle = item.latestChapter ?: item.updatedLabel,
                             typeLabel = item.typeLabel,
+                            sourceId = sourceId,
                             onClick = { nav.navigate(Routes.title(sourceId, item.id)) },
                         )
                     }

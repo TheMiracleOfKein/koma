@@ -2,6 +2,7 @@ package com.koma.kt.ui.shell
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,10 +11,12 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -34,18 +37,28 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.koma.kt.KomaApp
+import com.koma.kt.R
 import com.koma.kt.ui.nav.Routes
 import com.koma.kt.ui.theme.AppColors
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 @Composable
 fun MainMenu(
@@ -53,122 +66,140 @@ fun MainMenu(
     onNavigate: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
     val darkTheme by KomaApp.instance.prefs.darkTheme.collectAsState(initial = true)
     val sources by KomaApp.instance.sources.sources.collectAsState()
     val activeId by KomaApp.instance.sources.activeSourceId.collectAsState(initial = null)
     val activeName = sources.firstOrNull { it.manifest.id == activeId }?.manifest?.name
         ?: sources.firstOrNull()?.manifest?.name
-        ?: "нет"
+        ?: stringResource(R.string.none_short)
+
+    var dragOffset by remember { mutableFloatStateOf(0f) }
+    val closeThresholdPx = with(density) { 72.dp.toPx() }
 
     Box(modifier = Modifier.fillMaxSize()) {
+        // Tap dimmed area (right of the panel and edges) to close.
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black.copy(alpha = 0.54f))
                 .clickable(onClick = onClose),
         )
-        Row(modifier = Modifier.fillMaxSize()) {
-            Box(
-                modifier = Modifier
-                    .width(28.dp)
-                    .fillMaxHeight()
-                    .clickable(onClick = onClose),
-            )
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .widthIn(max = 400.dp)
+                .fillMaxWidth(0.88f)
+                .offset { IntOffset(dragOffset.roundToInt(), 0) }
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures(
+                        onDragCancel = { dragOffset = 0f },
+                        onDragEnd = {
+                            // Swipe toward the right edge dismisses a right-side drawer.
+                            if (dragOffset >= closeThresholdPx) onClose()
+                            else dragOffset = 0f
+                        },
+                        onHorizontalDrag = { change, amount ->
+                            if (amount > 0f || dragOffset > 0f) {
+                                change.consume()
+                                dragOffset = (dragOffset + amount).coerceAtLeast(0f)
+                            }
+                        },
+                    )
+                }
+                .clip(RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
+                .background(AppColors.background)
+                .statusBarsPadding()
+                .verticalScroll(rememberScrollState())
+                .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 24.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TopChip(
+                    icon = if (darkTheme) Icons.Outlined.DarkMode else Icons.Outlined.LightMode,
+                    label = stringResource(R.string.menu_theme),
+                    onClick = {
+                        scope.launch { KomaApp.instance.prefs.setDarkTheme(!darkTheme) }
+                    },
+                )
+                Spacer(Modifier.weight(1f))
+                TopChip(
+                    icon = Icons.Outlined.Search,
+                    label = stringResource(R.string.menu_search),
+                    onClick = {
+                        onClose()
+                        onNavigate(Routes.Search)
+                    },
+                )
+            }
+            Spacer(Modifier.height(16.dp))
             Column(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .background(AppColors.background)
-                    .statusBarsPadding()
-                    .verticalScroll(rememberScrollState())
-                    .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 24.dp),
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(AppColors.card),
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TopChip(
-                        icon = if (darkTheme) Icons.Outlined.DarkMode else Icons.Outlined.LightMode,
-                        label = "Тема",
-                        onClick = {
-                            scope.launch { KomaApp.instance.prefs.setDarkTheme(!darkTheme) }
-                        },
-                    )
-                    Spacer(Modifier.weight(1f))
-                    TopChip(
-                        icon = Icons.Outlined.Search,
-                        label = "Поиск",
-                        onClick = {
-                            onClose()
-                            onNavigate(Routes.Search)
-                        },
-                    )
-                }
-                Spacer(Modifier.height(16.dp))
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(AppColors.card),
-                ) {
-                    MenuTile(
-                        icon = Icons.Outlined.Public,
-                        title = "Источник",
-                        trailingText = activeName,
-                        onClick = {
-                            onClose()
-                            onNavigate(Routes.Sources)
-                        },
-                    )
-                    MenuTile(
-                        icon = Icons.Outlined.Settings,
-                        title = "Настройки",
-                        onClick = {
-                            onClose()
-                            onNavigate(Routes.Settings)
-                        },
-                    )
-                    MenuTile(
-                        icon = Icons.Outlined.Download,
-                        title = "Загрузки",
-                        onClick = {
-                            onClose()
-                            onNavigate(Routes.Downloads)
-                        },
-                    )
-                    MenuTile(
-                        icon = Icons.Outlined.History,
-                        title = "История",
-                        onClick = {
-                            onClose()
-                            onNavigate(Routes.History)
-                        },
-                    )
-                    MenuTile(
-                        icon = Icons.Outlined.BookmarkBorder,
-                        title = "Закладки",
-                        onClick = {
-                            onClose()
-                            onNavigate(Routes.Library)
-                        },
-                    )
-                    MenuTile(
-                        icon = Icons.Outlined.Home,
-                        title = "Главная",
-                        onClick = {
-                            onClose()
-                            onNavigate(Routes.Home)
-                        },
-                    )
-                    MenuTile(
-                        icon = Icons.Outlined.GridView,
-                        title = "Каталог",
-                        onClick = {
-                            onClose()
-                            onNavigate(Routes.Catalog)
-                        },
-                    )
-                }
+                MenuTile(
+                    icon = Icons.Outlined.Public,
+                    title = stringResource(R.string.menu_source),
+                    trailingText = activeName,
+                    onClick = {
+                        onClose()
+                        onNavigate(Routes.Sources)
+                    },
+                )
+                MenuTile(
+                    icon = Icons.Outlined.Settings,
+                    title = stringResource(R.string.menu_settings),
+                    onClick = {
+                        onClose()
+                        onNavigate(Routes.Settings)
+                    },
+                )
+                MenuTile(
+                    icon = Icons.Outlined.Download,
+                    title = stringResource(R.string.menu_downloads),
+                    onClick = {
+                        onClose()
+                        onNavigate(Routes.Downloads)
+                    },
+                )
+                MenuTile(
+                    icon = Icons.Outlined.History,
+                    title = stringResource(R.string.menu_history),
+                    onClick = {
+                        onClose()
+                        onNavigate(Routes.History)
+                    },
+                )
+                MenuTile(
+                    icon = Icons.Outlined.BookmarkBorder,
+                    title = stringResource(R.string.menu_library),
+                    onClick = {
+                        onClose()
+                        onNavigate(Routes.Library)
+                    },
+                )
+                MenuTile(
+                    icon = Icons.Outlined.Home,
+                    title = stringResource(R.string.menu_home),
+                    onClick = {
+                        onClose()
+                        onNavigate(Routes.Home)
+                    },
+                )
+                MenuTile(
+                    icon = Icons.Outlined.GridView,
+                    title = stringResource(R.string.menu_catalog),
+                    onClick = {
+                        onClose()
+                        onNavigate(Routes.Catalog)
+                    },
+                )
             }
         }
     }
@@ -215,10 +246,23 @@ private fun MenuTile(
             text = title,
             color = AppColors.textPrimary,
             fontSize = 15.sp,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         if (!trailingText.isNullOrBlank()) {
-            Text(trailingText, color = AppColors.textSecondary, fontSize = 13.sp)
+            Text(
+                text = trailingText,
+                color = AppColors.textSecondary,
+                fontSize = 13.sp,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .padding(start = 8.dp)
+                    .widthIn(max = 140.dp),
+            )
             Spacer(Modifier.width(4.dp))
         }
         Icon(

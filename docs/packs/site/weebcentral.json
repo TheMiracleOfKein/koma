@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "weebcentral",
+  "name": "Weeb Central",
+  "version": "1.0.0",
+  "mediaKind": "comics",
+  "language": "en",
+  "engine": "weebcentral",
+  "baseUrl": "https://weebcentral.com",
+  "headers": {
+    "Referer": "https://weebcentral.com/"
+  },
+  "engineConfig": {}
+}

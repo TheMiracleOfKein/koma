@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "hentailib",
+  "name": "HentaiLib",
+  "version": "1.0.0",
+  "mediaKind": "comics",
+  "language": "ru",
+  "nsfw": true,
+  "engine": "libsocial",
+  "baseUrl": "https://hentailib.me",
+  "headers": {
+    "Referer": "https://hentailib.me/"
+  },
+  "engineConfig": {
+    "apiBase": "https://api.cdnlibs.org/api",
+    "siteId": "4"
+  }
+}

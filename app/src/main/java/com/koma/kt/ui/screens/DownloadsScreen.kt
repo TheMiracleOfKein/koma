@@ -8,14 +8,19 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -23,29 +28,68 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import com.koma.kt.KomaApp
+import com.koma.kt.R
+import com.koma.kt.data.db.DownloadEntity
+import com.koma.kt.data.db.DownloadQueueEntity
 import com.koma.kt.ui.components.CoverImage
 import com.koma.kt.ui.nav.Routes
 import com.koma.kt.ui.theme.AppColors
 import kotlinx.coroutines.launch
 
+private data class DownloadTitleGroup(
+    val sourceId: String,
+    val titleId: String,
+    val titleName: String,
+    val coverUrl: String?,
+    val chapters: List<DownloadEntity>,
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DownloadsScreen(nav: NavHostController) {
     val downloads by KomaApp.instance.dao.observeDownloads().collectAsState(initial = emptyList())
+    val queue by KomaApp.instance.downloadQueue.items.collectAsState()
     val scope = rememberCoroutineScope()
+    var expanded by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    val groups = remember(downloads) {
+        downloads
+            .groupBy { "${it.sourceId}|${it.titleId}" }
+            .map { (_, items) ->
+                val first = items.first()
+                DownloadTitleGroup(
+                    sourceId = first.sourceId,
+                    titleId = first.titleId,
+                    titleName = first.titleName,
+                    coverUrl = first.coverUrl,
+                    chapters = items.sortedBy { it.chapterName },
+                )
+            }
+            .sortedBy { it.titleName.lowercase() }
+    }
+    val activeQueue = remember(queue) {
+        queue.filter {
+            it.status == DownloadQueueEntity.STATUS_PENDING ||
+                it.status == DownloadQueueEntity.STATUS_RUNNING
+        }
+    }
 
     Scaffold(
         containerColor = AppColors.background,
         topBar = {
             TopAppBar(
-                title = { Text("Загрузки", color = AppColors.textPrimary) },
+                title = { Text(stringResource(R.string.downloads_title), color = AppColors.textPrimary) },
                 navigationIcon = {
                     IconButton(onClick = { nav.popBackStack() }) {
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, null, tint = AppColors.textPrimary)
@@ -61,53 +105,155 @@ fun DownloadsScreen(nav: NavHostController) {
                 .fillMaxSize()
                 .background(AppColors.background),
         ) {
-            if (downloads.isEmpty()) {
+            if (groups.isEmpty() && activeQueue.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Загрузок пока нет", color = AppColors.textSecondary, fontSize = 15.sp)
+                    Text(stringResource(R.string.downloads_empty), color = AppColors.textSecondary, fontSize = 15.sp)
                 }
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(
-                        downloads,
-                        key = { "${it.sourceId}:${it.titleId}:${it.chapterId}" },
-                    ) { item ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    nav.navigate(
-                                        Routes.reader(item.sourceId, item.titleId, item.chapterId),
+                    if (activeQueue.isNotEmpty()) {
+                        item {
+                            Text(
+                                stringResource(R.string.downloads_queued),
+                                color = AppColors.textSecondary,
+                                fontSize = 13.sp,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            )
+                        }
+                        items(activeQueue, key = { "q-${it.id}" }) { item ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(item.titleName, color = AppColors.textPrimary, fontSize = 14.sp)
+                                    Text(item.chapterName, color = AppColors.textSecondary, fontSize = 12.sp)
+                                    if (item.status == DownloadQueueEntity.STATUS_RUNNING) {
+                                        LinearProgressIndicator(
+                                            progress = { item.progress },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(top = 6.dp),
+                                            color = AppColors.accent,
+                                            trackColor = AppColors.card,
+                                        )
+                                    } else {
+                                        Text(stringResource(R.string.downloads_waiting), color = AppColors.textTertiary, fontSize = 11.sp)
+                                    }
+                                }
+                                IconButton(onClick = { KomaApp.instance.downloadQueue.cancel(item.id) }) {
+                                    Icon(Icons.Outlined.Close, stringResource(R.string.action_cancel), tint = AppColors.danger)
+                                }
+                            }
+                        }
+                    }
+                    items(groups, key = { "${it.sourceId}:${it.titleId}" }) { group ->
+                        val key = "${group.sourceId}|${group.titleId}"
+                        val isOpen = key in expanded
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Box(
+                                    modifier = Modifier.clickable {
+                                        nav.navigate(Routes.title(group.sourceId, group.titleId))
+                                    },
+                                ) {
+                                    CoverImage(
+                                        url = group.coverUrl,
+                                        width = 48.dp,
+                                        height = 64.dp,
                                     )
                                 }
-                                .padding(horizontal = 16.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            CoverImage(url = item.coverUrl, width = 48.dp, height = 64.dp)
-                            Column(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .padding(horizontal = 12.dp),
-                            ) {
-                                Text(item.titleName, color = AppColors.textPrimary, fontSize = 14.sp)
-                                Text(item.chapterName, color = AppColors.textSecondary, fontSize = 12.sp)
-                                Text(
-                                    "${item.pageCount} стр.",
-                                    color = AppColors.textTertiary,
-                                    fontSize = 11.sp,
-                                )
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(horizontal = 12.dp)
+                                        .clickable {
+                                            nav.navigate(Routes.title(group.sourceId, group.titleId))
+                                        },
+                                ) {
+                                    Text(group.titleName, color = AppColors.textPrimary, fontSize = 15.sp)
+                                    Text(
+                                        stringResource(R.string.chapters_count_short, group.chapters.size),
+                                        color = AppColors.textSecondary,
+                                        fontSize = 12.sp,
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        scope.launch {
+                                            KomaApp.instance.downloads.deleteTitle(
+                                                group.sourceId,
+                                                group.titleId,
+                                            )
+                                        }
+                                    },
+                                ) {
+                                    Icon(Icons.Outlined.Delete, null, tint = AppColors.danger)
+                                }
+                                IconButton(
+                                    onClick = {
+                                        expanded = if (isOpen) expanded - key else expanded + key
+                                    },
+                                ) {
+                                    Icon(
+                                        if (isOpen) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                                        if (isOpen) stringResource(R.string.action_collapse) else stringResource(R.string.action_expand),
+                                        tint = AppColors.textSecondary,
+                                    )
+                                }
                             }
-                            IconButton(
-                                onClick = {
-                                    scope.launch {
-                                        KomaApp.instance.downloads.delete(
-                                            item.sourceId,
-                                            item.titleId,
-                                            item.chapterId,
-                                        )
+                            if (isOpen) {
+                                group.chapters.forEach { item ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                nav.navigate(
+                                                    Routes.reader(
+                                                        item.sourceId,
+                                                        item.titleId,
+                                                        item.chapterId,
+                                                    ),
+                                                )
+                                            }
+                                            .padding(start = 76.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(item.chapterName, color = AppColors.textPrimary, fontSize = 13.sp)
+                                            Text(
+                                                stringResource(R.string.pages_count_short, item.pageCount),
+                                                color = AppColors.textTertiary,
+                                                fontSize = 11.sp,
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = {
+                                                scope.launch {
+                                                    KomaApp.instance.downloads.delete(
+                                                        item.sourceId,
+                                                        item.titleId,
+                                                        item.chapterId,
+                                                    )
+                                                }
+                                            },
+                                        ) {
+                                            Icon(
+                                                Icons.Outlined.Delete,
+                                                null,
+                                                tint = AppColors.danger,
+                                                modifier = Modifier.size(20.dp),
+                                            )
+                                        }
                                     }
-                                },
-                            ) {
-                                Icon(Icons.Outlined.Delete, null, tint = AppColors.danger)
+                                }
                             }
                         }
                     }

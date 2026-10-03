@@ -11,7 +11,7 @@
     "Referer": "https://mangalib.me/"
   },
   "engineConfig": {
-    "apiBase": "https://api.mangalib.me/api",
+    "apiBase": "https://api.cdnlibs.org/api",
     "siteId": "1"
   }
 }

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "mangakatana",
+  "name": "MangaKatana",
+  "version": "1.0.0",
+  "mediaKind": "comics",
+  "language": "en",
+  "engine": "mangakatana",
+  "baseUrl": "https://mangakatana.com",
+  "headers": {
+    "Referer": "https://mangakatana.com/"
+  },
+  "engineConfig": {}
+}
