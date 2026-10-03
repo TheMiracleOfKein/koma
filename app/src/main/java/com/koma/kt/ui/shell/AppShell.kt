@@ -38,7 +38,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.navigation.NamedNavArgument
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -50,6 +53,7 @@ import com.koma.kt.KomaApp
 import com.koma.kt.R
 import com.koma.kt.ui.components.CloudflareChallengeOverlay
 import com.koma.kt.ui.components.KomaLogo
+import com.koma.kt.ui.nav.PredictiveBackClip
 import com.koma.kt.ui.nav.Routes
 import com.koma.kt.ui.screens.CatalogScreen
 import com.koma.kt.ui.screens.ChaptersScreen
@@ -136,15 +140,15 @@ fun AppShell(nav: NavHostController) {
                     .fillMaxSize()
                     .background(AppColors.background),
             ) {
-                composable(Routes.Home) { HomeScreen(nav) }
-                composable(Routes.Catalog) { CatalogScreen(nav) }
-                composable(Routes.Library) { LibraryScreen(nav) }
-                composable(Routes.History) { HistoryScreen(nav) }
-                composable(Routes.Search) { SearchScreen(nav) }
-                composable(Routes.Sources) { SourcesScreen(nav) }
-                composable(Routes.Settings) { SettingsScreen(nav) }
-                composable(Routes.Downloads) { DownloadsScreen(nav) }
-                composable(
+                komaComposable(Routes.Home) { HomeScreen(nav) }
+                komaComposable(Routes.Catalog) { CatalogScreen(nav) }
+                komaComposable(Routes.Library) { LibraryScreen(nav) }
+                komaComposable(Routes.History) { HistoryScreen(nav) }
+                komaComposable(Routes.Search) { SearchScreen(nav) }
+                komaComposable(Routes.Sources) { SourcesScreen(nav) }
+                komaComposable(Routes.Settings) { SettingsScreen(nav) }
+                komaComposable(Routes.Downloads) { DownloadsScreen(nav) }
+                komaComposable(
                     route = Routes.Title,
                     arguments = listOf(
                         navArgument("sourceId") { type = NavType.StringType },
@@ -157,7 +161,7 @@ fun AppShell(nav: NavHostController) {
                         titleId = Routes.decode(entry.arguments!!.getString("titleId")!!),
                     )
                 }
-                composable(
+                komaComposable(
                     route = Routes.Chapters,
                     arguments = listOf(
                         navArgument("sourceId") { type = NavType.StringType },
@@ -170,7 +174,7 @@ fun AppShell(nav: NavHostController) {
                         titleId = Routes.decode(entry.arguments!!.getString("titleId")!!),
                     )
                 }
-                composable(
+                komaComposable(
                     route = Routes.Reader,
                     arguments = listOf(
                         navArgument("sourceId") { type = NavType.StringType },
@@ -207,6 +211,18 @@ fun AppShell(nav: NavHostController) {
                     }
                 },
             )
+        }
+    }
+}
+
+private fun NavGraphBuilder.komaComposable(
+    route: String,
+    arguments: List<NamedNavArgument> = emptyList(),
+    content: @Composable (NavBackStackEntry) -> Unit,
+) {
+    composable(route = route, arguments = arguments) { entry ->
+        PredictiveBackClip {
+            content(entry)
         }
     }
 }
